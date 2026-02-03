@@ -8,6 +8,7 @@ Usage:
     python run_analysis.py --input output/raw.tsv.gz --output output/results
     python run_analysis.py --input output/raw.tsv.gz --analysis all --sample 0.1
     python run_analysis.py --input output/raw.tsv.gz --analysis standard --visualize
+    python run_analysis.py --input output/raw.tsv.gz --analysis creative --sample 0.1
 """
 
 import argparse
@@ -31,6 +32,9 @@ Examples:
   # Run advanced analysis with visualization
   python run_analysis.py -i output/raw.tsv.gz -o output/results -a advanced --visualize
   
+  # Run creative analysis (fractal dimension, entropy, etc.)
+  python run_analysis.py -i output/raw.tsv.gz -o output/results -a creative -s 0.1
+  
   # Quick test with 10000 rows
   python run_analysis.py -i output/raw.tsv.gz -o output/test -n 10000
         """
@@ -41,7 +45,7 @@ Examples:
     parser.add_argument('-o', '--output', type=str, default='output/analysis_results',
                         help='Output directory')
     parser.add_argument('-a', '--analysis', type=str, default='all',
-                        choices=['all', 'standard', 'advanced'],
+                        choices=['all', 'standard', 'advanced', 'creative'],
                         help='Which analysis suite to run')
     parser.add_argument('-s', '--sample', type=float, default=1.0,
                         help='Sample fraction (0-1) for efficiency')
@@ -82,6 +86,7 @@ Examples:
     # Import analysis modules
     from geospatial_analysis import load_data, run_analysis
     from advanced_analysis import run_advanced_analysis
+    from creative_analysis import run_creative_analysis
 
     # Load data
     print("\n📥 Loading data...")
@@ -105,18 +110,19 @@ Examples:
         print("=" * 40)
         advanced_results = run_advanced_analysis(df, str(output_path / 'advanced'))
 
+    if args.analysis in ['all', 'creative']:
+        print("\n" + "=" * 40)
+        print("🎨 Running Creative Analysis")
+        print("=" * 40)
+        creative_results = run_creative_analysis(df, str(output_path / 'creative'))
+
     # Generate visualizations
     if args.visualize:
         print("\n" + "=" * 40)
         print("📈 Generating Visualizations")
         print("=" * 40)
-        from visualization import generate_all_visualizations
-
-        if args.analysis in ['all', 'standard']:
-            generate_all_visualizations(str(output_path / 'standard'))
-        if args.analysis in ['all', 'advanced']:
-            # Advanced visualizations could be added here
-            pass
+        from visualization_suite import generate_all_visualizations
+        generate_all_visualizations(str(output_path), args.input)
 
     elapsed = time.time() - start_time
     print("\n" + "=" * 60)

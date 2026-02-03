@@ -262,7 +262,7 @@ class MovementPatterns:
             distance_threshold_km: Maximum roaming distance for stay
         """
         df = df.sort_values('Time').copy()
-        df['Time'] = pd.to_datetime(df['Time'])
+        df['Time'] = pd.to_datetime(df['Time'], format='ISO8601')
 
         stay_points = []
         i = 0
@@ -298,7 +298,7 @@ class MovementPatterns:
     def compute_speed_stats(df: pd.DataFrame) -> pd.DataFrame:
         """Compute speed statistics by various groupings."""
         df = df.copy()
-        df['Time'] = pd.to_datetime(df['Time'])
+        df['Time'] = pd.to_datetime(df['Time'], format='ISO8601')
         df['hour'] = df['Time'].dt.hour
         df['day_of_week'] = df['Time'].dt.dayofweek
         df['month'] = df['Time'].dt.month
@@ -334,7 +334,7 @@ class MovementPatterns:
         Returns array of segment IDs for each point.
         """
         df = df.sort_values('Time').copy()
-        df['Time'] = pd.to_datetime(df['Time'])
+        df['Time'] = pd.to_datetime(df['Time'], format='ISO8601')
 
         time_diffs = df['Time'].diff().dt.total_seconds() / 60
         segment_starts = (time_diffs > gap_threshold_min) | (time_diffs.isna())
@@ -452,7 +452,7 @@ class TemporalPatterns:
         Create hour x day-of-week activity matrix.
         """
         df = df.copy()
-        df['Time'] = pd.to_datetime(df['Time'])
+        df['Time'] = pd.to_datetime(df['Time'], format='ISO8601')
         df['hour'] = df['Time'].dt.hour
         df['day_of_week'] = df['Time'].dt.dayofweek
 
@@ -469,7 +469,7 @@ class TemporalPatterns:
         Returns hourly average speed and activity counts.
         """
         df = df.copy()
-        df['Time'] = pd.to_datetime(df['Time'])
+        df['Time'] = pd.to_datetime(df['Time'], format='ISO8601')
         df['hour'] = df['Time'].dt.hour
 
         rhythm = df.groupby('hour').agg({
@@ -485,7 +485,7 @@ class TemporalPatterns:
     def seasonal_patterns(df: pd.DataFrame) -> pd.DataFrame:
         """Analyze seasonal movement patterns."""
         df = df.copy()
-        df['Time'] = pd.to_datetime(df['Time'])
+        df['Time'] = pd.to_datetime(df['Time'], format='ISO8601')
         df['month'] = df['Time'].dt.month
         df['season'] = df['month'].map({
             12: 'Winter', 1: 'Winter', 2: 'Winter',

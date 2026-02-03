@@ -47,7 +47,7 @@ class SpaceTimeCube:
             temporal_resolution: Time binning ('D'=day, 'W'=week, 'M'=month)
         """
         df = df.copy()
-        df['Time'] = pd.to_datetime(df['Time'])
+        df['Time'] = pd.to_datetime(df['Time'], format='ISO8601')
         df['geohash'] = df.apply(lambda r: encode_geohash(r['lat'], r['lon'], spatial_resolution), axis=1)
         df['time_bin'] = df['Time'].dt.to_period(temporal_resolution)
 
@@ -216,7 +216,7 @@ class BehavioralStateClassification:
         df = df.copy().sort_values(['Name', 'Time'] if 'Name' in df.columns else 'Time')
 
         # Time differences
-        df['Time'] = pd.to_datetime(df['Time'])
+        df['Time'] = pd.to_datetime(df['Time'], format='ISO8601')
         df['time_diff'] = df.groupby('Name')['Time'].diff().dt.total_seconds() if 'Name' in df.columns else df['Time'].diff().dt.total_seconds()
 
         # Step length (distance between consecutive points)
@@ -308,7 +308,7 @@ class AnomalyDetection:
 
         # Add time-based features if available
         if 'Time' in df.columns:
-            df_time = pd.to_datetime(df['Time'])
+            df_time = pd.to_datetime(df['Time'], format='ISO8601')
             features['hour'] = df_time.dt.hour
             features['day_of_week'] = df_time.dt.dayofweek
 
