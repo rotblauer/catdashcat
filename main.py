@@ -1,95 +1,143 @@
+#!/usr/bin/env python3
+"""
+CatDash - Geospatial Analysis for Cat Tracking Data
+====================================================
+
+This module provides comprehensive geospatial analysis tools for analyzing
+GPS tracking data with millions of data points.
+
+Analysis Modules:
+-----------------
+- geospatial_analysis.py: Standard spatial analysis (clustering, hotspots, etc.)
+- advanced_analysis.py: Creative analyses (networks, behavioral states, etc.)
+- visualization.py: Efficient visualization for large datasets
+
+Quick Start:
+-----------
+    # Run full analysis suite
+    python run_analysis.py -i output/raw.tsv.gz -o output/results --visualize
+
+    # Run with sampling for speed
+    python run_analysis.py -i output/raw.tsv.gz -o output/results -s 0.1
+
+    # Import for custom analysis
+    from geospatial_analysis import SpatialClustering, HotspotAnalysis
+    from advanced_analysis import BehavioralStateClassification, MovementNetwork
+"""
+
 import argparse
-import json
 import sys
 
-import geopandas
-import umap.umap_ as umap
+
+def main():
+    """Entry point that delegates to run_analysis.py"""
+    # Import and run the main analysis
+    from run_analysis import main as run_main
+    run_main()
 
 
-# example usage:
-# python3 main.py --columns Name Activity --output output.csv < input.json
+def quick_analysis(input_file: str, output_dir: str = 'output/quick_analysis',
+                   sample_frac: float = 0.1) -> dict:
+    """
+    Quick analysis function for interactive use.
 
-# standardize the columns of interest to a mean of 0 and a standard deviation of 1
-def standardize_columns(df, columns):
-    # standardize the columns of interest to a mean of 0 and a standard deviation of 1
-    new_columns = []
-    for column in columns:
-        new_column = column + '_standardized'
-        df[new_column] = (df[column] - df[column].mean()) / df[column].std()
-        new_columns.append(new_column)
-    return df, new_columns
+    Args:
+        input_file: Path to input TSV (gzipped)
+        output_dir: Output directory
+        sample_frac: Fraction of data to sample
 
+    Returns:
+        Dictionary of analysis results
 
-# parses an input stream of new line delimited json features
-# extracts the columns of interest from the features
-# creates a geopandas dataframe from the features
-# returns a pandas dataframe
-def parse_features(input_stream):
-    # read a line from the input stream
-    features = [json.loads(line) for line in input_stream]
-    # create a pandas dataframe from the features
-    df = geopandas.GeoDataFrame.from_features(features)
-    # add lat and lon columns
-    df['lat'] = df.geometry.y
-    df['lon'] = df.geometry.x
-    # remove the geometry column
-    df = df.drop(columns=['geometry'])
-    return df
+    Example:
+        >>> from main import quick_analysis
+        >>> results = quick_analysis('output/raw.tsv.gz', sample_frac=0.1)
+    """
+    from geospatial_analysis import load_data, run_analysis
+
+    df = load_data(input_file, sample_frac=sample_frac)
+    results, enriched_df = run_analysis(df, output_dir)
+
+    return results
 
 
-# run UMAP on the columns of interest and the lat and lon columns
-# returns a pandas dataframe with the UMAP results
-# https://umap-learn.readthedocs.io/en/latest/embedding_space.html/
+def list_analyses():
+    """Print available analysis methods."""
+    print("""
+CatDash Geospatial Analysis Methods
+===================================
 
+STANDARD ANALYSIS (geospatial_analysis.py):
+-------------------------------------------
+• SpatialClustering
+  - dbscan_haversine: DBSCAN with haversine distance
+  - geohash_kmeans: Two-stage geohash + K-means clustering
 
-def run_umap(df, columns, metric_umap, components, n_neighbors, n_epochs, standardize):
-    operating_columns = columns + ['lat', 'lon']
-    if standardize:
-        print("standardizing columns " + str(operating_columns))
-        df, operating_columns = standardize_columns(df, operating_columns)
+• HotspotAnalysis  
+  - kernel_density_grid: KDE on spatial grid
+  - getis_ord_gi: Getis-Ord Gi* statistic for hotspot detection
 
-    print("running umap on columns " + str(operating_columns) + " with metric " + metric_umap)
-    embedding = umap.UMAP(n_components=components, output_metric=metric_umap,
-                          verbose=True, low_memory=False, transform_seed=42, n_neighbors=n_neighbors,
-                          n_epochs=n_epochs).fit_transform(
-        df[operating_columns])
+• MovementPatterns
+  - detect_stay_points: Identify locations with extended stays
+  - compute_speed_stats: Speed statistics by time/activity
+  - trajectory_segmentation: Split trajectories by time gaps
 
-    # name the columns of the UMAP results
-    for i in range(components):
-        df['umap_' + metric_umap + str(i)] = embedding[:, i]
-    return df
+• HomeRangeEstimation
+  - minimum_convex_polygon: MCP at various percentiles
+  - utilization_distribution: Kernel density contours
+
+• TemporalPatterns
+  - hourly_activity_matrix: Hour x day-of-week patterns
+  - activity_rhythm: Circadian activity patterns
+  - seasonal_patterns: Seasonal movement variations
+
+• GridAggregation
+  - geohash_aggregate: Aggregate by geohash cells
+  - hex_grid_aggregate: Hexagonal grid aggregation
+
+• SpatialStatistics
+  - global_morans_i: Spatial autocorrelation
+
+ADVANCED ANALYSIS (advanced_analysis.py):
+-----------------------------------------
+• SpaceTimeCube
+  - create_cube: Build space-time bins
+  - detect_emerging_hotspots: Mann-Kendall trend detection
+
+• MovementNetwork
+  - build_transition_network: Location transition graph
+  - find_hubs_and_connectors: Network centrality analysis
+
+• BehavioralStateClassification
+  - extract_movement_features: Step length, turn angle, etc.
+  - classify_states: GMM-based behavioral classification
+
+• AnomalyDetection
+  - detect_spatial_anomalies: Isolation Forest anomalies
+  - detect_speed_anomalies: Statistical speed outliers
+
+• TerritoryAnalysis
+  - compute_overlap: Jaccard overlap between individuals
+  - voronoi_territories: Voronoi tessellation
+
+• RipleysK
+  - compute_k_function: Point pattern analysis
+
+• FlowAnalysis
+  - compute_flow_matrix: Origin-destination flows
+  - identify_corridors: High-traffic movement paths
+    """)
 
 
 if __name__ == '__main__':
-    # parse the command line arguments
-    parser = argparse.ArgumentParser(
-        description='Summarizes the tracks in a json file using UMAP on the columns of interest')
-    # add the column argument with a default value
-    parser.add_argument('--columns', nargs='+', default=[])
-    parser.add_argument('--metrics', nargs='+', default=["euclidean", "haversine"])
-    parser.add_argument('--components', type=int, default=2)  # 2 or 3
-    # argument whether to save the raw data
-    parser.add_argument('--outputRaw', type=str, default=None)
-    parser.add_argument('--output', type=str, default='output/out.umap.tsv.gz')
-    parser.add_argument('--n_neighbors', type=int, default=15)
-    # add arument for n_epochs
-    parser.add_argument('--n_epochs', type=int, default=200)
-    # add flag whether to normalize the columns of interest
-    parser.add_argument('--standardize', action='store_true')
+    parser = argparse.ArgumentParser(description='CatDash Geospatial Analysis')
+    parser.add_argument('--list', action='store_true', help='List available analyses')
 
-    # parse the arguments
-    args = parser.parse_args()
+    args, remaining = parser.parse_known_args()
 
-    iDf = parse_features(sys.stdin)
-    if args.outputRaw is not None:
-        # write the dataframe to a tsv.gz file
-        iDf.to_csv(args.outputRaw, sep='\t', compression='gzip', index=False)
-    print(args.metrics)
-    # if metrics is "none", exit
-    if args.metrics == ["none"]:
-        sys.exit(0)
-
-    for metric in args.metrics:
-        iDf = run_umap(iDf, args.columns, metric, args.components, args.n_neighbors, args.n_epochs, args.standardize)
-    # write the dataframe to a tsv.gz file
-    iDf.to_csv(args.output, sep='\t', compression='gzip', index=False)
+    if args.list:
+        list_analyses()
+    else:
+        # Pass through to run_analysis
+        sys.argv = [sys.argv[0]] + remaining
+        main()
