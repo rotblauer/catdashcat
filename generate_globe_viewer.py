@@ -8,6 +8,8 @@ Example usage:
     python generate_globe_viewer.py -i output/raw.tsv.gz -o output/viewer/globe_viewer.html
     python generate_globe_viewer.py --resolutions 100 250 500 --sigma 1.2 --power 2.5
     .venv/bin/python generate_globe_viewer.py --resolutions 180 360 720
+    .venv/bin/python generate_globe_viewer.py --resolutions 720 1440 2880 --sigma 0.05
+
 """
 
 import argparse
@@ -22,7 +24,7 @@ from pathlib import Path
 WORLD_LAT_MIN, WORLD_LAT_MAX = -90.0, 90.0
 WORLD_LON_MIN, WORLD_LON_MAX = -180.0, 180.0
 
-DEFAULT_RESOLUTIONS = [90, 180, 360, 720]  # Degrees-based for globe (360 = 0.5° resolution)
+DEFAULT_RESOLUTIONS = [180, 360, 720, 1440, 2880]  # Up to 0.0625° resolution for fine detail
 DEFAULT_CHUNK_SIZE = 500_000
 
 
@@ -325,8 +327,8 @@ def generate_html(density_data: dict, default_sigma: float = 1.0, default_power:
             height: 180px;
             border-radius: 4px;
             background: linear-gradient(to top,
-                #141e30 0%, #1e3050 10%, #508cc8 25%,
-                #e94560 50%, #ff6b6b 70%, #feca57 85%, #fffff0 100%
+                #283c64 0%, #3c64a0 15%, #64a0dc 30%,
+                #c85078 45%, #ff5a5a 60%, #ffa03c 75%, #ffdc50 90%, #ffffc8 100%
             );
             box-shadow: 0 4px 12px rgba(0, 0, 0, 0.4);
             border: 1px solid rgba(255, 255, 255, 0.1);
@@ -465,16 +467,16 @@ def generate_html(density_data: dict, default_sigma: float = 1.0, default_power:
             autoRotate: false
         };
         
-        // Color gradient for density - low values are subtle/transparent
+        // Color gradient for density - vibrant peaks on dark background
         const colorStops = [
-            { pos: 0.00, color: [20, 30, 48] },    // Very dark blue (ocean)
-            { pos: 0.05, color: [30, 45, 65] },    // Dark blue
-            { pos: 0.15, color: [50, 80, 120] },   // Steel blue
-            { pos: 0.30, color: [80, 140, 200] },  // Light blue
-            { pos: 0.50, color: [233, 69, 96] },   // Rose red
-            { pos: 0.70, color: [255, 107, 107] }, // Coral
-            { pos: 0.85, color: [254, 202, 87] },  // Golden yellow
-            { pos: 1.00, color: [255, 255, 240] }  // Bright cream
+            { pos: 0.00, color: [40, 60, 100] },    // Dark blue base
+            { pos: 0.15, color: [60, 100, 160] },   // Medium blue
+            { pos: 0.30, color: [100, 160, 220] },  // Light blue
+            { pos: 0.45, color: [200, 80, 120] },   // Rose
+            { pos: 0.60, color: [255, 90, 90] },    // Bright red
+            { pos: 0.75, color: [255, 160, 60] },   // Orange
+            { pos: 0.90, color: [255, 220, 80] },   // Yellow
+            { pos: 1.00, color: [255, 255, 200] }   // Bright cream
         ];
         
         function interpolateColor(t) {
@@ -631,7 +633,7 @@ def generate_html(density_data: dict, default_sigma: float = 1.0, default_power:
             const indices = [];
             
             const heightScale = settings.heightScale * GLOBE_RADIUS;
-            const threshold = 0.02; // Minimum value to show a peak
+            const threshold = settings.threshold; // Use setting for minimum value to show
             
             let vertexCount = 0;
             
@@ -903,7 +905,10 @@ def generate_html(density_data: dict, default_sigma: float = 1.0, default_power:
                 '180': 'Low (180) - 1°',
                 '360': 'Medium (360) - 0.5°',
                 '720': 'High (720) - 0.25°',
-                '1080': 'Very High (1080)'
+                '1080': 'Very High (1080) - 0.17°',
+                '1440': 'Ultra (1440) - 0.125°',
+                '2880': 'Extreme (2880) - 0.0625°',
+                '3600': 'Maximum (3600) - 0.05°'
             };
             
             resSelect.innerHTML = '';
@@ -928,7 +933,7 @@ def generate_html(density_data: dict, default_sigma: float = 1.0, default_power:
             const sigmaValue = document.getElementById('sigma-value');
             sigmaSlider.addEventListener('input', (e) => {
                 settings.sigma = parseFloat(e.target.value);
-                sigmaValue.textContent = settings.sigma.toFixed(1);
+                sigmaValue.textContent = settings.sigma.toFixed(2);
             });
             sigmaSlider.addEventListener('change', () => updateVisualization());
             
@@ -947,6 +952,14 @@ def generate_html(density_data: dict, default_sigma: float = 1.0, default_power:
                 heightValue.textContent = settings.heightScale.toFixed(2);
             });
             heightSlider.addEventListener('change', () => updateVisualization());
+            
+            const thresholdSlider = document.getElementById('threshold');
+            const thresholdValue = document.getElementById('threshold-value');
+            thresholdSlider.addEventListener('input', (e) => {
+                settings.threshold = parseFloat(e.target.value);
+                thresholdValue.textContent = settings.threshold.toFixed(3);
+            });
+            thresholdSlider.addEventListener('change', () => updateVisualization());
             
             document.getElementById('show-boundaries').addEventListener('change', (e) => {
                 settings.showBoundaries = e.target.value === 'true';
@@ -1021,8 +1034,8 @@ def main():
                         help=f'Rows per chunk (default: {DEFAULT_CHUNK_SIZE:,})')
     parser.add_argument('--shapefile', default='output/cb_2020_us_county_500k.shp',
                         help='Shapefile for US state/county boundaries')
-    parser.add_argument('--sigma', type=float, default=1.0,
-                        help='Default smoothing sigma')
+    parser.add_argument('--sigma', type=float, default=0.1,
+                        help='Default smoothing sigma (0-0.5, lower = sharper)')
     parser.add_argument('--power', type=float, default=2.0,
                         help='Default power exponent')
     args = parser.parse_args()
