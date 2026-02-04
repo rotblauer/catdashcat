@@ -6,51 +6,139 @@ Usage:
     cat input.json | python json_to_tsv.py -o output/raw.tsv.gz
     python json_to_tsv.py -i input.json -o output/raw.tsv.gz
 
-Uses geopandas to robustly handle inconsistent JSON schemas.
+Handles inconsistent JSON schemas with memory-efficient two-pass processing.
 """
 
 import argparse
 import json
 import sys
-import geopandas
+import gzip
+import csv
+import tempfile
+import os
+from collections import OrderedDict
 
 
-def parse_features(input_stream):
+def extract_feature(line):
     """
-    Parse newline-delimited GeoJSON features into a DataFrame.
-    Uses geopandas which handles inconsistent schemas robustly.
+    Extract properties and lat/lon from a GeoJSON feature line.
+    Returns (props_dict, lat, lon) or None if invalid.
     """
-    print("Reading JSON features...", file=sys.stderr)
-    features = []
-    count = 0
-    for line in input_stream:
-        line = line.strip()
-        if not line:
-            continue
-        try:
-            features.append(json.loads(line))
+    line = line.strip()
+    if not line:
+        return None
+    try:
+        feature = json.loads(line)
+        props = feature.get('properties', {})
+        geom = feature.get('geometry', {})
+        coords = geom.get('coordinates', [])
+
+        # Extract lat/lon
+        if len(coords) >= 2:
+            try:
+                lon = float(coords[0])
+                lat = float(coords[1])
+            except (TypeError, ValueError):
+                return None
+        else:
+            return None
+
+        return props, lat, lon
+    except (json.JSONDecodeError, TypeError, KeyError):
+        return None
+
+
+def process_two_pass(input_path, output_path):
+    """
+    Memory-efficient two-pass processing for file input.
+
+    Pass 1: Scan all records to find all columns (only stores column names)
+    Pass 2: Write all records with consistent schema
+    """
+    all_columns = OrderedDict()
+    all_columns['lat'] = True
+    all_columns['lon'] = True
+
+    # Pass 1: Scan for all columns
+    print("Pass 1: Scanning for columns...", file=sys.stderr)
+    total_count = 0
+    skipped = 0
+
+    with open(input_path, 'r') as f:
+        for line in f:
+            result = extract_feature(line)
+            if result is None:
+                skipped += 1
+                continue
+
+            props, lat, lon = result
+            total_count += 1
+
+            # Track new columns
+            for key in props.keys():
+                if key not in all_columns:
+                    all_columns[key] = True
+
+            if total_count % 100000 == 0:
+                print(f"  Scanned {total_count:,} records, {len(all_columns)} columns...",
+                      file=sys.stderr, end='\r')
+
+    print(f"\n  Scanned {total_count:,} records, skipped {skipped:,}", file=sys.stderr)
+    print(f"  Found {len(all_columns)} columns", file=sys.stderr)
+
+    # Pass 2: Write with consistent schema
+    print("Pass 2: Writing output...", file=sys.stderr)
+    columns = list(all_columns.keys())
+
+    written = 0
+    with open(input_path, 'r') as fin:
+        with gzip.open(output_path, 'wt', encoding='utf-8', newline='') as fout:
+            writer = csv.DictWriter(fout, fieldnames=columns, delimiter='\t',
+                                    extrasaction='ignore', restval='')
+            writer.writeheader()
+
+            for line in fin:
+                result = extract_feature(line)
+                if result is None:
+                    continue
+
+                props, lat, lon = result
+                row = props.copy()
+                row['lat'] = lat
+                row['lon'] = lon
+                writer.writerow(row)
+                written += 1
+
+                if written % 100000 == 0:
+                    print(f"  Written {written:,} records...", file=sys.stderr, end='\r')
+
+    print(f"\n✓ Wrote {written:,} records to {output_path}", file=sys.stderr)
+    return written
+
+
+def process_stdin(output_path):
+    """
+    Process stdin by writing to temp file first, then using two-pass.
+    """
+    print("Reading from stdin to temp file...", file=sys.stderr)
+
+    # Write stdin to temp file
+    with tempfile.NamedTemporaryFile(mode='w', delete=False, suffix='.json') as tmp:
+        tmp_path = tmp.name
+        count = 0
+        for line in sys.stdin:
+            tmp.write(line)
             count += 1
             if count % 100000 == 0:
-                print(f"  Read {count:,} features...", file=sys.stderr, end='\r')
-        except json.JSONDecodeError:
-            continue
+                print(f"  Buffered {count:,} lines...", file=sys.stderr, end='\r')
+        print(f"\n  Buffered {count:,} lines to {tmp_path}", file=sys.stderr)
 
-    print(f"\n  Read {count:,} total features", file=sys.stderr)
-
-    print("Converting to GeoDataFrame...", file=sys.stderr)
-    df = geopandas.GeoDataFrame.from_features(features)
-
-    # Add lat/lon columns from geometry
-    df['lat'] = df.geometry.y
-    df['lon'] = df.geometry.x
-
-    # Remove geometry column
-    df = df.drop(columns=['geometry'])
-
-    print(f"  Created DataFrame with {len(df):,} rows, {len(df.columns)} columns", file=sys.stderr)
-    print(f"  Columns: {list(df.columns)}", file=sys.stderr)
-
-    return df
+    try:
+        # Now use two-pass on temp file
+        process_two_pass(tmp_path, output_path)
+    finally:
+        # Clean up temp file
+        os.unlink(tmp_path)
 
 
 def main():
@@ -63,17 +151,10 @@ def main():
 
     args = parser.parse_args()
 
-    # Read input
     if args.input:
-        with open(args.input, 'r') as f:
-            df = parse_features(f)
+        process_two_pass(args.input, args.output)
     else:
-        df = parse_features(sys.stdin)
-
-    # Write output
-    print(f"Writing to {args.output}...", file=sys.stderr)
-    df.to_csv(args.output, sep='\t', compression='gzip', index=False)
-    print(f"✓ Wrote {len(df):,} records to {args.output}", file=sys.stderr)
+        process_stdin(args.output)
 
 
 if __name__ == '__main__':
