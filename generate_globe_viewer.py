@@ -192,6 +192,125 @@ def compress_histogram(hist: np.ndarray) -> dict:
     }
 
 
+def find_top_peaks(histograms: dict, n_peaks: int = 10) -> list:
+    """Find the top N peaks from the highest resolution histogram."""
+    # Use the highest resolution histogram
+    max_res = max(histograms.keys())
+    hist = histograms[max_res]
+    width, height = hist.shape
+
+    # Get top N cells by count
+    flat_indices = np.argsort(hist.flatten())[::-1][:n_peaks * 3]  # Get extra to filter duplicates
+
+    peaks = []
+    min_distance_deg = 1.0  # Minimum 1 degree separation between peaks
+
+    for flat_idx in flat_indices:
+        if len(peaks) >= n_peaks:
+            break
+
+        x = flat_idx // height
+        y = flat_idx % height
+        count = hist[x, y]
+
+        if count <= 0:
+            continue
+
+        # Convert to lat/lon
+        lon = (x + 0.5) / width * 360 - 180
+        lat = (y + 0.5) / height * 180 - 90
+
+        # Check distance from existing peaks
+        too_close = False
+        for existing in peaks:
+            dlat = abs(lat - existing['lat'])
+            dlon = abs(lon - existing['lon'])
+            if dlat < min_distance_deg and dlon < min_distance_deg:
+                too_close = True
+                break
+
+        if not too_close:
+            peaks.append({
+                'lat': float(lat),
+                'lon': float(lon),
+                'count': int(count),
+                'rank': len(peaks) + 1
+            })
+
+    return peaks
+
+
+def build_local_histogram(input_file: str, center_lat: float, center_lon: float,
+                          radius_km: float = 50, resolution: int = 200,
+                          chunk_size: int = 500_000) -> dict:
+    """Build a high-resolution histogram for a local region around a point.
+
+    Args:
+        center_lat, center_lon: Center of the region
+        radius_km: Radius in kilometers (default 50km = 100km x 100km region)
+        resolution: Number of bins per side
+    """
+    # Convert km to approximate degrees (at given latitude)
+    km_per_deg_lat = 111.0
+    km_per_deg_lon = 111.0 * np.cos(np.radians(center_lat))
+
+    lat_radius = radius_km / km_per_deg_lat
+    lon_radius = radius_km / km_per_deg_lon
+
+    lat_min = center_lat - lat_radius
+    lat_max = center_lat + lat_radius
+    lon_min = center_lon - lon_radius
+    lon_max = center_lon + lon_radius
+
+    lon_edges = np.linspace(lon_min, lon_max, resolution + 1, dtype=np.float32)
+    lat_edges = np.linspace(lat_min, lat_max, resolution + 1, dtype=np.float32)
+    hist = np.zeros((resolution, resolution), dtype=np.float32)
+
+    total_points = 0
+
+    for chunk in pd.read_csv(
+        input_file,
+        sep='\t',
+        compression='gzip',
+        usecols=['lat', 'lon'],
+        dtype={'lat': 'str', 'lon': 'str'},
+        chunksize=chunk_size,
+        on_bad_lines='skip'
+    ):
+        chunk['lat'] = pd.to_numeric(chunk['lat'], errors='coerce')
+        chunk['lon'] = pd.to_numeric(chunk['lon'], errors='coerce')
+
+        mask = (
+            chunk['lat'].between(lat_min, lat_max) &
+            chunk['lon'].between(lon_min, lon_max)
+        )
+        filtered = chunk.loc[mask].dropna()
+
+        if filtered.empty:
+            continue
+
+        h, _, _ = np.histogram2d(
+            filtered['lon'].values,
+            filtered['lat'].values,
+            bins=[lon_edges, lat_edges]
+        )
+        hist += h.astype(np.float32)
+        total_points += len(filtered)
+
+    return {
+        'histogram': compress_histogram(hist),
+        'bounds': {
+            'lat_min': float(lat_min),
+            'lat_max': float(lat_max),
+            'lon_min': float(lon_min),
+            'lon_max': float(lon_max)
+        },
+        'center': {'lat': center_lat, 'lon': center_lon},
+        'radius_km': radius_km,
+        'total_points': total_points
+    }
+
+
 def generate_html(density_data: dict, default_sigma: float = 1.0, default_power: float = 2.0) -> str:
     """Generate the complete static HTML globe viewer with embedded data."""
 
@@ -349,10 +468,10 @@ def generate_html(density_data: dict, default_sigma: float = 1.0, default_power:
         
         .hint { font-size: 9px; color: #666; margin-top: 2px; font-style: italic; }
         
-        #focus-btn {
+        #focus-btn, #side-view-btn, #reset-view-btn {
             width: 100%;
             padding: 8px;
-            margin-top: 10px;
+            margin-top: 8px;
             background: #e94560;
             border: none;
             border-radius: 6px;
@@ -362,8 +481,138 @@ def generate_html(density_data: dict, default_sigma: float = 1.0, default_power:
             transition: background 0.2s;
         }
         
-        #focus-btn:hover { background: #ff6b6b; }
+        #focus-btn:hover, #side-view-btn:hover, #reset-view-btn:hover { background: #ff6b6b; }
+        
+        #side-view-btn { background: #4a90d9; }
+        #side-view-btn:hover { background: #6ba8e8; }
+        
+        #reset-view-btn { background: #666; }
+        #reset-view-btn:hover { background: #888; }
+        
+        /* Peak labels panel */
+        #peaks-panel {
+            position: absolute;
+            top: 20px;
+            right: 80px;
+            background: rgba(20, 20, 40, 0.9);
+            padding: 15px;
+            border-radius: 12px;
+            box-shadow: 0 8px 32px rgba(0, 0, 0, 0.4);
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            max-width: 200px;
+            z-index: 100;
+        }
+        
+        #peaks-panel h3 { font-size: 14px; color: #feca57; margin-bottom: 10px; }
+        
+        .peak-item {
+            display: flex;
+            align-items: center;
+            padding: 6px 8px;
+            margin: 4px 0;
+            background: rgba(255,255,255,0.05);
+            border-radius: 6px;
+            cursor: pointer;
+            transition: all 0.2s;
+            font-size: 11px;
+        }
+        
+        .peak-item:hover { background: rgba(233, 69, 96, 0.3); }
+        .peak-item.active { background: rgba(233, 69, 96, 0.5); border: 1px solid #e94560; }
+        
+        .peak-rank {
+            width: 20px;
+            height: 20px;
+            background: #e94560;
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-weight: bold;
+            font-size: 10px;
+            margin-right: 8px;
+        }
+        
+        .peak-info { flex: 1; }
+        .peak-info .coords { color: #888; font-size: 9px; }
+        
+        /* Local view overlay */
+        #local-view-overlay {
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100vw;
+            height: 100vh;
+            background: rgba(0,0,0,0.9);
+            z-index: 500;
+            display: none;
+        }
+        
+        #local-view-overlay.active { display: flex; }
+        
+        #local-view-container {
+            display: flex;
+            width: 100%;
+            height: 100%;
+        }
+        
+        #local-map-container {
+            flex: 1;
+            position: relative;
+        }
+        
+        #local-3d-container {
+            flex: 1;
+            position: relative;
+        }
+        
+        #local-controls {
+            position: absolute;
+            top: 20px;
+            left: 20px;
+            background: rgba(20, 20, 40, 0.95);
+            padding: 15px;
+            border-radius: 12px;
+            box-shadow: 0 8px 32px rgba(0, 0, 0, 0.4);
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            min-width: 220px;
+            z-index: 510;
+        }
+        
+        #local-controls h2 { font-size: 16px; color: #feca57; margin-bottom: 5px; }
+        #local-controls .subtitle { font-size: 11px; color: #888; margin-bottom: 15px; }
+        
+        #close-local-btn {
+            position: absolute;
+            top: 20px;
+            right: 20px;
+            width: 40px;
+            height: 40px;
+            background: #e94560;
+            border: none;
+            border-radius: 50%;
+            color: white;
+            font-size: 20px;
+            cursor: pointer;
+            z-index: 520;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+        
+        #close-local-btn:hover { background: #ff6b6b; }
+        
+        /* Leaflet map styling */
+        #local-map {
+            width: 100%;
+            height: 100%;
+        }
+        
+        .leaflet-container { background: #1a1a2e; }
     </style>
+    
+    <!-- Leaflet CSS for map -->
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
 </head>
 <body>
     <div id="container">
@@ -428,11 +677,18 @@ def generate_html(density_data: dict, default_sigma: float = 1.0, default_power:
             </div>
             
             <button id="focus-btn">🇺🇸 Focus on USA</button>
+            <button id="side-view-btn">↔️ Side View</button>
+            <button id="reset-view-btn">🔄 Reset View</button>
+        </div>
+        
+        <div id="peaks-panel" class="hidden">
+            <h3>🏔️ Top Peaks</h3>
+            <div id="peaks-list"></div>
         </div>
         
         <div id="stats" class="hidden">
             GPS observations: <span id="point-count">0</span> |
-            Drag to rotate, scroll to zoom
+            Drag to rotate, scroll to zoom, right-drag to pan
         </div>
         
         <div id="colorbar" class="hidden"></div>
@@ -441,11 +697,54 @@ def generate_html(density_data: dict, default_sigma: float = 1.0, default_power:
             <span>Low</span>
         </div>
     </div>
+    
+    <!-- Local View Overlay -->
+    <div id="local-view-overlay">
+        <button id="close-local-btn">✕</button>
+        <div id="local-view-container">
+            <div id="local-map-container">
+                <div id="local-map"></div>
+            </div>
+            <div id="local-3d-container">
+                <div id="local-canvas"></div>
+            </div>
+        </div>
+        <div id="local-controls">
+            <h2 id="local-title">Peak #1</h2>
+            <p class="subtitle" id="local-subtitle">100km × 100km region</p>
+            
+            <div class="control-group">
+                <label>Smoothing (σ)</label>
+                <input type="range" id="local-sigma" min="0" max="0.5" step="0.01" value="0.05">
+                <div class="value" id="local-sigma-value">0.05</div>
+            </div>
+            
+            <div class="control-group">
+                <label>Peak Height</label>
+                <input type="range" id="local-power" min="1" max="4" step="0.1" value="2.0">
+                <div class="value" id="local-power-value">2.0</div>
+            </div>
+            
+            <div class="control-group">
+                <label>Height Scale</label>
+                <input type="range" id="local-height" min="0.1" max="2" step="0.05" value="0.5">
+                <div class="value" id="local-height-value">0.50</div>
+            </div>
+            
+            <div class="control-group">
+                <label>Threshold</label>
+                <input type="range" id="local-threshold" min="0" max="0.1" step="0.002" value="0.01">
+                <div class="value" id="local-threshold-value">0.010</div>
+            </div>
+        </div>
+    </div>
 
     <!-- Three.js -->
     <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r134/three.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/three@0.134.0/examples/js/controls/OrbitControls.js"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/pako/2.1.0/pako.min.js"></script>
+    <!-- Leaflet JS for map -->
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
     
     <script>
         // Embedded density data (base64 gzipped JSON)
@@ -825,6 +1124,56 @@ def generate_html(density_data: dict, default_sigma: float = 1.0, default_power:
             animateCamera();
         }
         
+        function sideView() {
+            // Animate camera to a horizontal side view of the globe
+            const pos = new THREE.Vector3(GLOBE_RADIUS * 3, 0, 0);
+            
+            const startPos = camera.position.clone();
+            const startTarget = controls.target.clone();
+            const endTarget = new THREE.Vector3(0, 0, 0);
+            const duration = 1000;
+            const startTime = Date.now();
+            
+            function animateCamera() {
+                const elapsed = Date.now() - startTime;
+                const t = Math.min(1, elapsed / duration);
+                const eased = t * t * (3 - 2 * t);
+                
+                camera.position.lerpVectors(startPos, pos, eased);
+                controls.target.lerpVectors(startTarget, endTarget, eased);
+                
+                if (t < 1) {
+                    requestAnimationFrame(animateCamera);
+                }
+            }
+            animateCamera();
+        }
+        
+        function resetView() {
+            // Reset camera to default position
+            const pos = new THREE.Vector3(0, 0, 15);
+            
+            const startPos = camera.position.clone();
+            const startTarget = controls.target.clone();
+            const endTarget = new THREE.Vector3(0, 0, 0);
+            const duration = 800;
+            const startTime = Date.now();
+            
+            function animateCamera() {
+                const elapsed = Date.now() - startTime;
+                const t = Math.min(1, elapsed / duration);
+                const eased = t * t * (3 - 2 * t);
+                
+                camera.position.lerpVectors(startPos, pos, eased);
+                controls.target.lerpVectors(startTarget, endTarget, eased);
+                
+                if (t < 1) {
+                    requestAnimationFrame(animateCamera);
+                }
+            }
+            animateCamera();
+        }
+        
         function initScene() {
             const container = document.getElementById('canvas-container');
             
@@ -861,10 +1210,16 @@ def generate_html(density_data: dict, default_sigma: float = 1.0, default_power:
             controls = new THREE.OrbitControls(camera, renderer.domElement);
             controls.enableDamping = true;
             controls.dampingFactor = 0.05;
-            controls.minDistance = GLOBE_RADIUS * 1.5;
-            controls.maxDistance = GLOBE_RADIUS * 10;
+            controls.minDistance = GLOBE_RADIUS * 1.2;  // Allow closer zoom
+            controls.maxDistance = GLOBE_RADIUS * 15;   // Allow further zoom out
             controls.autoRotate = false;
             controls.autoRotateSpeed = 0.5;
+            // Allow full rotation - no angle restrictions
+            controls.minPolarAngle = 0;           // Can look from top
+            controls.maxPolarAngle = Math.PI;     // Can look from bottom
+            controls.enablePan = true;            // Allow panning
+            controls.panSpeed = 0.5;
+            controls.rotateSpeed = 0.8;
             
             // Lighting
             scene.add(new THREE.AmbientLight(0xffffff, 0.3));
@@ -972,9 +1327,390 @@ def generate_html(density_data: dict, default_sigma: float = 1.0, default_power:
             });
             
             document.getElementById('focus-btn').addEventListener('click', focusOnUSA);
+            document.getElementById('side-view-btn').addEventListener('click', sideView);
+            document.getElementById('reset-view-btn').addEventListener('click', resetView);
             
             document.getElementById('point-count').textContent = 
                 densityData.total_points.toLocaleString();
+            
+            // Setup peaks panel
+            setupPeaksPanel();
+        }
+        
+        // ============================================
+        // PEAKS PANEL AND LOCAL VIEW FUNCTIONALITY
+        // ============================================
+        
+        let localScene, localCamera, localRenderer, localControls;
+        let localDensityMesh, localMap;
+        let currentPeakIndex = -1;
+        
+        const localSettings = {
+            sigma: 0.05,
+            power: 2.0,
+            heightScale: 0.5,
+            threshold: 0.01
+        };
+        
+        function setupPeaksPanel() {
+            if (!densityData.peaks || densityData.peaks.length === 0) {
+                return;
+            }
+            
+            const peaksList = document.getElementById('peaks-list');
+            peaksList.innerHTML = '';
+            
+            densityData.peaks.forEach((peak, index) => {
+                const item = document.createElement('div');
+                item.className = 'peak-item';
+                item.innerHTML = `
+                    <div class="peak-rank">${index + 1}</div>
+                    <div class="peak-info">
+                        <div>${peak.count.toLocaleString()} obs</div>
+                        <div class="coords">${peak.lat.toFixed(2)}°, ${peak.lon.toFixed(2)}°</div>
+                    </div>
+                `;
+                item.addEventListener('click', () => openLocalView(index));
+                peaksList.appendChild(item);
+            });
+            
+            document.getElementById('peaks-panel').classList.remove('hidden');
+        }
+        
+        function openLocalView(peakIndex) {
+            currentPeakIndex = peakIndex;
+            const peak = densityData.peaks[peakIndex];
+            const localData = densityData.local_views[peakIndex.toString()];
+            
+            if (!localData) {
+                console.error('No local data for peak', peakIndex);
+                return;
+            }
+            
+            // Update title
+            document.getElementById('local-title').textContent = `Peak #${peakIndex + 1}`;
+            document.getElementById('local-subtitle').textContent = 
+                `${(localData.radius_km * 2).toFixed(0)}km × ${(localData.radius_km * 2).toFixed(0)}km region • ${localData.total_points.toLocaleString()} points`;
+            
+            // Show overlay
+            document.getElementById('local-view-overlay').classList.add('active');
+            
+            // Initialize map
+            setTimeout(() => {
+                initLocalMap(localData);
+                initLocal3D(localData);
+            }, 100);
+        }
+        
+        function closeLocalView() {
+            document.getElementById('local-view-overlay').classList.remove('active');
+            
+            // Clean up
+            if (localMap) {
+                localMap.remove();
+                localMap = null;
+            }
+            if (localRenderer) {
+                localRenderer.dispose();
+                const canvas = document.getElementById('local-canvas');
+                canvas.innerHTML = '';
+            }
+            currentPeakIndex = -1;
+        }
+        
+        function initLocalMap(localData) {
+            const bounds = localData.bounds;
+            const center = localData.center;
+            
+            // Remove existing map if any
+            if (localMap) {
+                localMap.remove();
+            }
+            
+            // Create map
+            localMap = L.map('local-map', {
+                center: [center.lat, center.lon],
+                zoom: 11,
+                zoomControl: true
+            });
+            
+            // Add OpenStreetMap tiles (Carto light style for cleaner look)
+            L.tileLayer('https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png', {
+                attribution: '© OpenStreetMap contributors © CARTO',
+                subdomains: 'abcd',
+                maxZoom: 19
+            }).addTo(localMap);
+            
+            // Fit to bounds
+            localMap.fitBounds([
+                [bounds.lat_min, bounds.lon_min],
+                [bounds.lat_max, bounds.lon_max]
+            ]);
+            
+            // Add rectangle showing the region
+            L.rectangle([
+                [bounds.lat_min, bounds.lon_min],
+                [bounds.lat_max, bounds.lon_max]
+            ], {
+                color: '#e94560',
+                weight: 2,
+                fillOpacity: 0.1
+            }).addTo(localMap);
+            
+            // Add center marker
+            L.circleMarker([center.lat, center.lon], {
+                radius: 8,
+                color: '#e94560',
+                fillColor: '#e94560',
+                fillOpacity: 0.8
+            }).addTo(localMap);
+        }
+        
+        function initLocal3D(localData) {
+            const container = document.getElementById('local-canvas');
+            container.innerHTML = '';
+            
+            const width = container.clientWidth || window.innerWidth / 2;
+            const height = container.clientHeight || window.innerHeight;
+            
+            // Scene
+            localScene = new THREE.Scene();
+            localScene.background = new THREE.Color(0x1a1a2e);
+            
+            // Camera - angled view
+            localCamera = new THREE.PerspectiveCamera(45, width / height, 0.1, 1000);
+            localCamera.position.set(0, -8, 6);
+            localCamera.lookAt(0, 0, 0);
+            
+            // Renderer
+            localRenderer = new THREE.WebGLRenderer({ antialias: true });
+            localRenderer.setSize(width, height);
+            localRenderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+            container.appendChild(localRenderer.domElement);
+            
+            // Controls
+            localControls = new THREE.OrbitControls(localCamera, localRenderer.domElement);
+            localControls.enableDamping = true;
+            localControls.dampingFactor = 0.05;
+            localControls.minDistance = 3;
+            localControls.maxDistance = 20;
+            
+            // Lighting
+            localScene.add(new THREE.AmbientLight(0xffffff, 0.4));
+            
+            const light1 = new THREE.DirectionalLight(0xffffff, 0.8);
+            light1.position.set(5, 5, 10);
+            localScene.add(light1);
+            
+            const light2 = new THREE.DirectionalLight(0xffffff, 0.3);
+            light2.position.set(-5, -5, 5);
+            localScene.add(light2);
+            
+            // Create density visualization
+            updateLocalVisualization(localData);
+            
+            // Animation loop
+            function animateLocal() {
+                if (currentPeakIndex === -1) return;
+                requestAnimationFrame(animateLocal);
+                localControls.update();
+                localRenderer.render(localScene, localCamera);
+            }
+            animateLocal();
+            
+            // Setup local controls
+            setupLocalControls(localData);
+        }
+        
+        function updateLocalVisualization(localData) {
+            // Process histogram
+            const histData = localData.histogram;
+            const [width, height] = histData.shape;
+            
+            // Decompress
+            const data = new Float32Array(width * height);
+            for (let i = 0; i < histData.indices.length; i++) {
+                const [x, y] = histData.indices[i];
+                data[y * width + x] = histData.values[i];
+            }
+            
+            // Apply gaussian blur
+            const blurred = gaussianBlur(data, width, height, localSettings.sigma);
+            
+            // Apply power transformation
+            const result = new Float32Array(width * height);
+            let maxVal = 0;
+            for (let i = 0; i < blurred.length; i++) {
+                if (blurred[i] > 0) {
+                    result[i] = Math.pow(Math.log1p(blurred[i]), localSettings.power);
+                    maxVal = Math.max(maxVal, result[i]);
+                }
+            }
+            if (maxVal > 0) {
+                for (let i = 0; i < result.length; i++) {
+                    result[i] /= maxVal;
+                }
+            }
+            
+            // Remove old mesh
+            if (localDensityMesh) {
+                localScene.remove(localDensityMesh);
+                localDensityMesh.geometry.dispose();
+                localDensityMesh.material.dispose();
+            }
+            
+            // Create mesh
+            localDensityMesh = createLocalDensityMesh(result, width, height, localData.bounds);
+            localScene.add(localDensityMesh);
+        }
+        
+        function createLocalDensityMesh(data, width, height, bounds) {
+            const geometry = new THREE.BufferGeometry();
+            const vertices = [];
+            const colors = [];
+            const indices = [];
+            
+            const scaleX = 8;
+            const scaleY = 8 * ((bounds.lat_max - bounds.lat_min) / (bounds.lon_max - bounds.lon_min));
+            const heightScale = localSettings.heightScale * 4;
+            const threshold = localSettings.threshold;
+            
+            let vertexCount = 0;
+            
+            for (let y = 0; y < height; y++) {
+                for (let x = 0; x < width; x++) {
+                    const idx = y * width + x;
+                    const z = data[idx] || 0;
+                    
+                    if (z < threshold) continue;
+                    
+                    // Grid position to XY
+                    const px = (x + 0.5) / width - 0.5;
+                    const py = (y + 0.5) / height - 0.5;
+                    
+                    // Cell size
+                    const dx = 1 / width;
+                    const dy = 1 / height;
+                    
+                    // Base and peak heights
+                    const baseZ = 0;
+                    const peakZ = z * heightScale;
+                    
+                    // 4 corners
+                    const x0 = (px - dx/2) * scaleX, x1 = (px + dx/2) * scaleX;
+                    const y0 = (py - dy/2) * scaleY, y1 = (py + dy/2) * scaleY;
+                    
+                    // Colors
+                    const color = interpolateColor(z);
+                    const r = color[0]/255, g = color[1]/255, b = color[2]/255;
+                    const rd = r*0.5, gd = g*0.5, bd = b*0.5;
+                    
+                    const baseIdx = vertexCount;
+                    
+                    // 8 vertices: 4 base + 4 peak
+                    vertices.push(x0, y0, baseZ); colors.push(rd, gd, bd);
+                    vertices.push(x1, y0, baseZ); colors.push(rd, gd, bd);
+                    vertices.push(x1, y1, baseZ); colors.push(rd, gd, bd);
+                    vertices.push(x0, y1, baseZ); colors.push(rd, gd, bd);
+                    vertices.push(x0, y0, peakZ); colors.push(r, g, b);
+                    vertices.push(x1, y0, peakZ); colors.push(r, g, b);
+                    vertices.push(x1, y1, peakZ); colors.push(r, g, b);
+                    vertices.push(x0, y1, peakZ); colors.push(r, g, b);
+                    
+                    // Top face
+                    indices.push(baseIdx+4, baseIdx+5, baseIdx+6);
+                    indices.push(baseIdx+4, baseIdx+6, baseIdx+7);
+                    
+                    // Sides
+                    indices.push(baseIdx+0, baseIdx+4, baseIdx+1);
+                    indices.push(baseIdx+1, baseIdx+4, baseIdx+5);
+                    indices.push(baseIdx+1, baseIdx+5, baseIdx+2);
+                    indices.push(baseIdx+2, baseIdx+5, baseIdx+6);
+                    indices.push(baseIdx+2, baseIdx+6, baseIdx+3);
+                    indices.push(baseIdx+3, baseIdx+6, baseIdx+7);
+                    indices.push(baseIdx+3, baseIdx+7, baseIdx+0);
+                    indices.push(baseIdx+0, baseIdx+7, baseIdx+4);
+                    
+                    vertexCount += 8;
+                }
+            }
+            
+            if (vertices.length === 0) {
+                return new THREE.Mesh(new THREE.BufferGeometry(), new THREE.MeshBasicMaterial());
+            }
+            
+            geometry.setAttribute('position', new THREE.Float32BufferAttribute(vertices, 3));
+            geometry.setAttribute('color', new THREE.Float32BufferAttribute(colors, 3));
+            geometry.setIndex(indices);
+            geometry.computeVertexNormals();
+            
+            // Add a base plane
+            const planeGeo = new THREE.PlaneGeometry(scaleX * 1.05, scaleY * 1.05);
+            const planeMat = new THREE.MeshBasicMaterial({ color: 0x2a3a5a, side: THREE.DoubleSide });
+            const plane = new THREE.Mesh(planeGeo, planeMat);
+            plane.position.z = -0.01;
+            
+            const group = new THREE.Group();
+            group.add(plane);
+            
+            const material = new THREE.MeshPhongMaterial({
+                vertexColors: true,
+                side: THREE.DoubleSide,
+                shininess: 20
+            });
+            const mesh = new THREE.Mesh(geometry, material);
+            group.add(mesh);
+            
+            return group;
+        }
+        
+        function setupLocalControls(localData) {
+            const sigmaSlider = document.getElementById('local-sigma');
+            const sigmaValue = document.getElementById('local-sigma-value');
+            sigmaSlider.value = localSettings.sigma;
+            sigmaValue.textContent = localSettings.sigma.toFixed(2);
+            
+            sigmaSlider.oninput = (e) => {
+                localSettings.sigma = parseFloat(e.target.value);
+                sigmaValue.textContent = localSettings.sigma.toFixed(2);
+            };
+            sigmaSlider.onchange = () => updateLocalVisualization(localData);
+            
+            const powerSlider = document.getElementById('local-power');
+            const powerValue = document.getElementById('local-power-value');
+            powerSlider.value = localSettings.power;
+            powerValue.textContent = localSettings.power.toFixed(1);
+            
+            powerSlider.oninput = (e) => {
+                localSettings.power = parseFloat(e.target.value);
+                powerValue.textContent = localSettings.power.toFixed(1);
+            };
+            powerSlider.onchange = () => updateLocalVisualization(localData);
+            
+            const heightSlider = document.getElementById('local-height');
+            const heightValue = document.getElementById('local-height-value');
+            heightSlider.value = localSettings.heightScale;
+            heightValue.textContent = localSettings.heightScale.toFixed(2);
+            
+            heightSlider.oninput = (e) => {
+                localSettings.heightScale = parseFloat(e.target.value);
+                heightValue.textContent = localSettings.heightScale.toFixed(2);
+            };
+            heightSlider.onchange = () => updateLocalVisualization(localData);
+            
+            const thresholdSlider = document.getElementById('local-threshold');
+            const thresholdValue = document.getElementById('local-threshold-value');
+            thresholdSlider.value = localSettings.threshold;
+            thresholdValue.textContent = localSettings.threshold.toFixed(3);
+            
+            thresholdSlider.oninput = (e) => {
+                localSettings.threshold = parseFloat(e.target.value);
+                thresholdValue.textContent = localSettings.threshold.toFixed(3);
+            };
+            thresholdSlider.onchange = () => updateLocalVisualization(localData);
+            
+            // Close button
+            document.getElementById('close-local-btn').onclick = closeLocalView;
         }
         
         async function init() {
@@ -988,7 +1724,9 @@ def generate_html(density_data: dict, default_sigma: float = 1.0, default_power:
                 console.log('Loaded globe data:', {
                     resolutions: Object.keys(densityData.histograms),
                     totalPoints: densityData.total_points,
-                    boundaries: densityData.boundaries?.length || 0
+                    boundaries: densityData.boundaries?.length || 0,
+                    peaks: densityData.peaks?.length || 0,
+                    localViews: Object.keys(densityData.local_views || {}).length
                 });
                 
                 boundaryLines = createBoundaryLines();
@@ -1002,6 +1740,11 @@ def generate_html(density_data: dict, default_sigma: float = 1.0, default_power:
                 document.getElementById('stats').classList.remove('hidden');
                 document.getElementById('colorbar').classList.remove('hidden');
                 document.getElementById('colorbar-labels').classList.remove('hidden');
+                
+                // Show peaks panel if peaks exist
+                if (densityData.peaks && densityData.peaks.length > 0) {
+                    document.getElementById('peaks-panel').classList.remove('hidden');
+                }
                 
                 // Start focused on USA
                 setTimeout(focusOnUSA, 500);
@@ -1038,6 +1781,12 @@ def main():
                         help='Default smoothing sigma (0-0.5, lower = sharper)')
     parser.add_argument('--power', type=float, default=2.0,
                         help='Default power exponent')
+    parser.add_argument('--n-peaks', type=int, default=10,
+                        help='Number of top peaks to include local views for')
+    parser.add_argument('--local-radius', type=float, default=50.0,
+                        help='Radius in km for local peak views (default: 50 = 100km x 100km)')
+    parser.add_argument('--local-resolution', type=int, default=200,
+                        help='Resolution for local peak histograms (default: 200)')
     args = parser.parse_args()
 
     density_data = {
@@ -1049,6 +1798,8 @@ def main():
         },
         'histograms': {},
         'boundaries': [],
+        'peaks': [],
+        'local_views': {},
         'total_points': 0
     }
 
@@ -1065,6 +1816,28 @@ def main():
         nonzero = (hist > 0).sum()
         lat_bins = res // 2
         print(f"   ✓ {res} x {lat_bins} (lon x lat): {nonzero:,} non-zero cells")
+
+    # Find top peaks
+    print(f"\n🏔️  Finding top {args.n_peaks} peaks...")
+    peaks = find_top_peaks(histograms, n_peaks=args.n_peaks)
+    density_data['peaks'] = peaks
+    for i, peak in enumerate(peaks):
+        print(f"   {i+1}. ({peak['lat']:.2f}, {peak['lon']:.2f}) - {peak['count']:,} observations")
+
+    # Build local high-resolution histograms for each peak
+    print(f"\n🔍 Building local views ({args.local_radius*2:.0f}km × {args.local_radius*2:.0f}km regions)...")
+    for i, peak in enumerate(peaks):
+        print(f"   Processing peak {i+1}/{len(peaks)}: ({peak['lat']:.2f}, {peak['lon']:.2f})...")
+        local_data = build_local_histogram(
+            args.input,
+            peak['lat'],
+            peak['lon'],
+            radius_km=args.local_radius,
+            resolution=args.local_resolution,
+            chunk_size=args.chunk_size
+        )
+        density_data['local_views'][str(i)] = local_data
+        print(f"      ✓ {local_data['total_points']:,} points in region")
 
     # Extract boundaries (US states + world countries if available)
     print(f"\n🗺️  Extracting boundaries...")
