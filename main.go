@@ -49,9 +49,17 @@ func validActivity(activity string, require bool, removeUnknownActivity bool) bo
 }
 
 func parseStreamPerProperty(reader io.Reader, writer io.Writer, n int, property string, names map[string]bool, accuracy float64, requireActivity bool, removeUnknownActivity bool) {
-	dec := json.NewDecoder(reader)
+	breader := bufio.NewReaderSize(reader, 1024*1024) // 1MB buffer
+	bwriter := bufio.NewWriterSize(writer, 1024*1024) // 1MB buffer
+	defer bwriter.Flush()
+
+	dec := json.NewDecoder(breader)
+	enc := json.NewEncoder(bwriter)
+
 	m := make(map[string]int)
 	pCount := 0
+	totalCount := 0
+	start := time.Now()
 	for {
 		var t T
 		if err := dec.Decode(&t); err == io.EOF {
@@ -59,6 +67,7 @@ func parseStreamPerProperty(reader io.Reader, writer io.Writer, n int, property 
 		} else if err != nil {
 			panic(err)
 		}
+		totalCount++
 		//	switch on the property to select on
 		switch property {
 		case "Name":
@@ -67,17 +76,23 @@ func parseStreamPerProperty(reader io.Reader, writer io.Writer, n int, property 
 			if passName(names, t) && passesAccuracy(t.Properties.Accuracy, accuracy) && validActivity(t.Properties.Activity, requireActivity, removeUnknownActivity) {
 				m[t.Properties.Name]++
 				if m[t.Properties.Name]%n == 0 {
-					printT(t, writer)
+					enc.Encode(t)
 					pCount++
-					if pCount%10000 == 0 {
-						printMap(m, os.Stderr)
-					}
 				}
 			}
 		default:
 			panic("invalid property")
 		}
+		// Progress reporting
+		if totalCount%100000 == 0 {
+			elapsed := time.Since(start).Seconds()
+			rate := float64(totalCount) / elapsed
+			fmt.Fprintf(os.Stderr, "\r[parse] %dk processed, %dk output, %.0f/sec",
+				totalCount/1000, pCount/1000, rate)
+		}
 	}
+	elapsed := time.Since(start).Seconds()
+	fmt.Fprintf(os.Stderr, "\n[parse] Done: %d processed, %d output in %.1fs\n", totalCount, pCount, elapsed)
 	printMap(m, os.Stderr)
 }
 
@@ -141,9 +156,13 @@ var errInvalidMatchAny = errors.New("invalid match-any")
 var errInvalidMatchNone = errors.New("invalid match-none")
 
 func filterStream(reader io.Reader, writer io.Writer, matchAll []string, matchAny []string, matchNone []string) {
-	breader := bufio.NewReader(reader)
-	bwriter := bufio.NewWriter(writer)
+	breader := bufio.NewReaderSize(reader, 1024*1024)  // 1MB buffer
+	bwriter := bufio.NewWriterSize(writer, 1024*1024)  // 1MB buffer
+	defer bwriter.Flush()
 
+	count := 0
+	passed := 0
+	start := time.Now()
 readLoop:
 	for {
 		read, err := breader.ReadBytes('\n')
@@ -153,13 +172,24 @@ readLoop:
 			}
 			log.Fatalln(err)
 		}
+		count++
 		if err := filter(read, matchAll, matchAny, matchNone); err != nil {
-			// log.Println(err)
 			continue readLoop
 		}
 		bwriter.Write(read)
-		bwriter.Flush()
+		passed++
+		// Progress and flush periodically
+		if count%100000 == 0 {
+			elapsed := time.Since(start).Seconds()
+			rate := float64(count) / elapsed
+			fmt.Fprintf(os.Stderr, "\r[filter] %dk processed, %dk passed (%.1f%%), %.0f/sec",
+				count/1000, passed/1000, 100*float64(passed)/float64(count), rate)
+			bwriter.Flush()
+		}
 	}
+	elapsed := time.Since(start).Seconds()
+	fmt.Fprintf(os.Stderr, "\n[filter] Done: %d processed, %d passed (%.1f%%) in %.1fs\n",
+		count, passed, 100*float64(passed)/float64(count), elapsed)
 }
 
 // filter filters some read line on the matchAll, matchAny, and matchNone queries.

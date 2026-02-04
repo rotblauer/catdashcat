@@ -20,7 +20,7 @@ with open('output/results/alignment_test.txt', 'w') as f:
 
     X, Y = np.meshgrid(xc, yc)
     f.write(f"X shape: {X.shape}\n")
-    f.write(f"Y shape: {Y.shape}\n")
+    f.write(f"Y shacpe: {Y.shape}\n")
 
     Z = h.T
     f.write(f"Z shape: {Z.shape}\n")

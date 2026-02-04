@@ -10,7 +10,7 @@ Scalable geospatial analysis toolkit for millions of GPS tracking points. Implem
 pip install -r requirements.txt
 
 # Run full analysis suite with 10% sample
-python run_analysis.py -i output/raw.tsv.gz -o output/results -s 0.1 --visualize
+.venv/bin/python run_analysis.py -i output/raw.tsv.gz -o output/results -s 0.1 --visualize
 
 # Run only standard analysis
 python run_analysis.py -i output/raw.tsv.gz -o output/results -a standard
