@@ -19,6 +19,8 @@ import json
 import numpy as np
 import pandas as pd
 from pathlib import Path
+from concurrent.futures import ThreadPoolExecutor, as_completed
+import threading
 
 # World bounds
 WORLD_LAT_MIN, WORLD_LAT_MAX = -90.0, 90.0
@@ -242,13 +244,14 @@ def find_top_peaks(histograms: dict, n_peaks: int = 10) -> list:
 
 def build_local_histogram(input_file: str, center_lat: float, center_lon: float,
                           radius_km: float = 50, resolution: int = 200,
-                          chunk_size: int = 500_000) -> dict:
+                          chunk_size: int = 500_000, peak_index: int = 0) -> dict:
     """Build a high-resolution histogram for a local region around a point.
 
     Args:
         center_lat, center_lon: Center of the region
         radius_km: Radius in kilometers (default 50km = 100km x 100km region)
         resolution: Number of bins per side
+        peak_index: Index of the peak (for logging)
     """
     # Convert km to approximate degrees (at given latitude)
     km_per_deg_lat = 111.0
@@ -298,6 +301,7 @@ def build_local_histogram(input_file: str, center_lat: float, center_lon: float,
         total_points += len(filtered)
 
     return {
+        'peak_index': peak_index,
         'histogram': compress_histogram(hist),
         'bounds': {
             'lat_min': float(lat_min),
@@ -309,6 +313,51 @@ def build_local_histogram(input_file: str, center_lat: float, center_lon: float,
         'radius_km': radius_km,
         'total_points': total_points
     }
+
+
+def build_local_histograms_parallel(input_file: str, peaks: list, radius_km: float = 50,
+                                     resolution: int = 200, chunk_size: int = 500_000,
+                                     max_workers: int = 4) -> dict:
+    """Build local histograms for all peaks in parallel using threads.
+
+    Args:
+        input_file: Path to input TSV file
+        peaks: List of peak dictionaries with 'lat' and 'lon'
+        radius_km: Radius in km for each local region
+        resolution: Number of bins per side
+        chunk_size: Rows per chunk when reading
+        max_workers: Number of parallel threads
+
+    Returns:
+        Dictionary mapping peak index (as string) to local histogram data
+    """
+    local_views = {}
+    print_lock = threading.Lock()
+
+    def process_peak(args):
+        idx, peak = args
+        result = build_local_histogram(
+            input_file,
+            peak['lat'],
+            peak['lon'],
+            radius_km=radius_km,
+            resolution=resolution,
+            chunk_size=chunk_size,
+            peak_index=idx
+        )
+        with print_lock:
+            print(f"   ✓ Peak {idx+1}: ({peak['lat']:.2f}, {peak['lon']:.2f}) - {result['total_points']:,} points")
+        return idx, result
+
+    # Use ThreadPoolExecutor for parallel I/O
+    with ThreadPoolExecutor(max_workers=max_workers) as executor:
+        futures = [executor.submit(process_peak, (i, peak)) for i, peak in enumerate(peaks)]
+
+        for future in as_completed(futures):
+            idx, result = future.result()
+            local_views[str(idx)] = result
+
+    return local_views
 
 
 def generate_html(density_data: dict, default_sigma: float = 1.0, default_power: float = 2.0) -> str:
@@ -1344,6 +1393,8 @@ def generate_html(density_data: dict, default_sigma: float = 1.0, default_power:
         let localScene, localCamera, localRenderer, localControls;
         let localDensityMesh, localMap;
         let currentPeakIndex = -1;
+        let currentLocalData = null;  // Store current local data globally
+        let localAnimationId = null;  // Track animation frame
         
         const localSettings = {
             sigma: 0.05,
@@ -1378,6 +1429,11 @@ def generate_html(density_data: dict, default_sigma: float = 1.0, default_power:
         }
         
         function openLocalView(peakIndex) {
+            // Clean up any existing local view first
+            if (currentPeakIndex !== -1) {
+                cleanupLocalView();
+            }
+            
             currentPeakIndex = peakIndex;
             const peak = densityData.peaks[peakIndex];
             const localData = densityData.local_views[peakIndex.toString()];
@@ -1387,6 +1443,9 @@ def generate_html(density_data: dict, default_sigma: float = 1.0, default_power:
                 return;
             }
             
+            // Store globally for slider updates
+            currentLocalData = localData;
+            
             // Update title
             document.getElementById('local-title').textContent = `Peak #${peakIndex + 1}`;
             document.getElementById('local-subtitle').textContent = 
@@ -1395,27 +1454,72 @@ def generate_html(density_data: dict, default_sigma: float = 1.0, default_power:
             // Show overlay
             document.getElementById('local-view-overlay').classList.add('active');
             
-            // Initialize map
+            // Initialize map and 3D view
             setTimeout(() => {
                 initLocalMap(localData);
                 initLocal3D(localData);
+                setupLocalControls();  // No argument needed now
             }, 100);
         }
         
-        function closeLocalView() {
-            document.getElementById('local-view-overlay').classList.remove('active');
+        function cleanupLocalView() {
+            // Stop animation
+            if (localAnimationId) {
+                cancelAnimationFrame(localAnimationId);
+                localAnimationId = null;
+            }
             
-            // Clean up
+            // Clean up map
             if (localMap) {
                 localMap.remove();
                 localMap = null;
             }
+            
+            // Clean up 3D
+            if (localDensityMesh) {
+                disposeObject(localDensityMesh);
+                localDensityMesh = null;
+            }
+            if (localScene) {
+                // Dispose all children
+                while(localScene.children.length > 0) {
+                    disposeObject(localScene.children[0]);
+                    localScene.remove(localScene.children[0]);
+                }
+            }
             if (localRenderer) {
                 localRenderer.dispose();
-                const canvas = document.getElementById('local-canvas');
-                canvas.innerHTML = '';
+                localRenderer = null;
             }
+            if (localControls) {
+                localControls.dispose();
+                localControls = null;
+            }
+            
+            const canvas = document.getElementById('local-canvas');
+            if (canvas) canvas.innerHTML = '';
+        }
+        
+        // Helper to recursively dispose Three.js objects
+        function disposeObject(obj) {
+            if (obj.geometry) obj.geometry.dispose();
+            if (obj.material) {
+                if (Array.isArray(obj.material)) {
+                    obj.material.forEach(m => m.dispose());
+                } else {
+                    obj.material.dispose();
+                }
+            }
+            if (obj.children) {
+                obj.children.forEach(child => disposeObject(child));
+            }
+        }
+        
+        function closeLocalView() {
+            document.getElementById('local-view-overlay').classList.remove('active');
+            cleanupLocalView();
             currentPeakIndex = -1;
+            currentLocalData = null;
         }
         
         function initLocalMap(localData) {
@@ -1507,24 +1611,25 @@ def generate_html(density_data: dict, default_sigma: float = 1.0, default_power:
             localScene.add(light2);
             
             // Create density visualization
-            updateLocalVisualization(localData);
+            updateLocalVisualization();
             
             // Animation loop
             function animateLocal() {
-                if (currentPeakIndex === -1) return;
-                requestAnimationFrame(animateLocal);
-                localControls.update();
-                localRenderer.render(localScene, localCamera);
+                if (currentPeakIndex === -1 || !localRenderer) return;
+                localAnimationId = requestAnimationFrame(animateLocal);
+                if (localControls) localControls.update();
+                if (localRenderer && localScene && localCamera) {
+                    localRenderer.render(localScene, localCamera);
+                }
             }
             animateLocal();
-            
-            // Setup local controls
-            setupLocalControls(localData);
         }
         
-        function updateLocalVisualization(localData) {
+        function updateLocalVisualization() {
+            if (!currentLocalData || !localScene) return;
+            
             // Process histogram
-            const histData = localData.histogram;
+            const histData = currentLocalData.histogram;
             const [width, height] = histData.shape;
             
             // Decompress
@@ -1555,12 +1660,12 @@ def generate_html(density_data: dict, default_sigma: float = 1.0, default_power:
             // Remove old mesh
             if (localDensityMesh) {
                 localScene.remove(localDensityMesh);
-                localDensityMesh.geometry.dispose();
-                localDensityMesh.material.dispose();
+                disposeObject(localDensityMesh);
+                localDensityMesh = null;
             }
             
             // Create mesh
-            localDensityMesh = createLocalDensityMesh(result, width, height, localData.bounds);
+            localDensityMesh = createLocalDensityMesh(result, width, height, currentLocalData.bounds);
             localScene.add(localDensityMesh);
         }
         
@@ -1664,7 +1769,7 @@ def generate_html(density_data: dict, default_sigma: float = 1.0, default_power:
             return group;
         }
         
-        function setupLocalControls(localData) {
+        function setupLocalControls() {
             const sigmaSlider = document.getElementById('local-sigma');
             const sigmaValue = document.getElementById('local-sigma-value');
             sigmaSlider.value = localSettings.sigma;
@@ -1674,7 +1779,7 @@ def generate_html(density_data: dict, default_sigma: float = 1.0, default_power:
                 localSettings.sigma = parseFloat(e.target.value);
                 sigmaValue.textContent = localSettings.sigma.toFixed(2);
             };
-            sigmaSlider.onchange = () => updateLocalVisualization(localData);
+            sigmaSlider.onchange = () => updateLocalVisualization();
             
             const powerSlider = document.getElementById('local-power');
             const powerValue = document.getElementById('local-power-value');
@@ -1685,7 +1790,7 @@ def generate_html(density_data: dict, default_sigma: float = 1.0, default_power:
                 localSettings.power = parseFloat(e.target.value);
                 powerValue.textContent = localSettings.power.toFixed(1);
             };
-            powerSlider.onchange = () => updateLocalVisualization(localData);
+            powerSlider.onchange = () => updateLocalVisualization();
             
             const heightSlider = document.getElementById('local-height');
             const heightValue = document.getElementById('local-height-value');
@@ -1696,7 +1801,7 @@ def generate_html(density_data: dict, default_sigma: float = 1.0, default_power:
                 localSettings.heightScale = parseFloat(e.target.value);
                 heightValue.textContent = localSettings.heightScale.toFixed(2);
             };
-            heightSlider.onchange = () => updateLocalVisualization(localData);
+            heightSlider.onchange = () => updateLocalVisualization();
             
             const thresholdSlider = document.getElementById('local-threshold');
             const thresholdValue = document.getElementById('local-threshold-value');
@@ -1707,7 +1812,7 @@ def generate_html(density_data: dict, default_sigma: float = 1.0, default_power:
                 localSettings.threshold = parseFloat(e.target.value);
                 thresholdValue.textContent = localSettings.threshold.toFixed(3);
             };
-            thresholdSlider.onchange = () => updateLocalVisualization(localData);
+            thresholdSlider.onchange = () => updateLocalVisualization();
             
             // Close button
             document.getElementById('close-local-btn').onclick = closeLocalView;
@@ -1787,6 +1892,8 @@ def main():
                         help='Radius in km for local peak views (default: 50 = 100km x 100km)')
     parser.add_argument('--local-resolution', type=int, default=200,
                         help='Resolution for local peak histograms (default: 200)')
+    parser.add_argument('--workers', type=int, default=4,
+                        help='Number of parallel workers for local histograms (default: 4)')
     args = parser.parse_args()
 
     density_data = {
@@ -1824,20 +1931,16 @@ def main():
     for i, peak in enumerate(peaks):
         print(f"   {i+1}. ({peak['lat']:.2f}, {peak['lon']:.2f}) - {peak['count']:,} observations")
 
-    # Build local high-resolution histograms for each peak
-    print(f"\n🔍 Building local views ({args.local_radius*2:.0f}km × {args.local_radius*2:.0f}km regions)...")
-    for i, peak in enumerate(peaks):
-        print(f"   Processing peak {i+1}/{len(peaks)}: ({peak['lat']:.2f}, {peak['lon']:.2f})...")
-        local_data = build_local_histogram(
-            args.input,
-            peak['lat'],
-            peak['lon'],
-            radius_km=args.local_radius,
-            resolution=args.local_resolution,
-            chunk_size=args.chunk_size
-        )
-        density_data['local_views'][str(i)] = local_data
-        print(f"      ✓ {local_data['total_points']:,} points in region")
+    # Build local high-resolution histograms for each peak (parallel)
+    print(f"\n🔍 Building local views ({args.local_radius*2:.0f}km × {args.local_radius*2:.0f}km regions) using {args.workers} workers...")
+    density_data['local_views'] = build_local_histograms_parallel(
+        args.input,
+        peaks,
+        radius_km=args.local_radius,
+        resolution=args.local_resolution,
+        chunk_size=args.chunk_size,
+        max_workers=args.workers
+    )
 
     # Extract boundaries (US states + world countries if available)
     print(f"\n🗺️  Extracting boundaries...")
