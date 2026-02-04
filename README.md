@@ -48,6 +48,81 @@ python run_analysis.py -i output/raw.tsv.gz -o output/test -n 10000
 | **Point Patterns** | `RipleysK` | Ripley's K function for clustering detection |
 | **Flow Analysis** | `FlowAnalysis` | Origin-destination flows, corridor identification |
 
+### Creative Analysis (`creative_analysis.py`)
+
+Creative visualization techniques for exploring spatial patterns.
+
+## Interactive 3D Viewers (WebGL)
+
+High-performance, interactive 3D viewers for exploring density patterns. Both generate **self-contained static HTML files** that can be opened directly in any browser - perfect for sharing, GitHub Pages, or serving from simple hardware like a Raspberry Pi.
+
+### US Flat Map Viewer
+
+```bash
+# Generate static HTML viewer (no server needed!)
+.venv/bin/python generate_static_viewer.py -i output/raw.tsv.gz -o output/viewer/density_viewer.html
+
+# Open directly in browser
+open output/viewer/density_viewer.html
+
+# With custom resolutions (larger file, more detail)
+.venv/bin/python generate_static_viewer.py --resolutions 100 250 500
+```
+
+### Global Globe Viewer 🌍
+
+```bash
+# Generate interactive 3D globe
+.venv/bin/python generate_globe_viewer.py -i output/raw.tsv.gz -o output/viewer/globe_viewer.html
+
+# Open directly in browser  
+open output/viewer/globe_viewer.html
+
+# With higher resolution
+.venv/bin/python generate_globe_viewer.py --resolutions 180 360 720
+```
+
+### Viewer Features
+
+| Feature | Flat Map | Globe |
+|---------|----------|-------|
+| **Self-contained HTML** | ✅ ~3 MB | ✅ ~5 MB |
+| **No server needed** | ✅ | ✅ |
+| **Dynamic Resolution** | 100-1000 | 180-720 |
+| **Real-time Smoothing (σ)** | ✅ | ✅ |
+| **Peak Emphasis (power)** | ✅ | ✅ |
+| **US State Boundaries** | ✅ | ✅ |
+| **3D Rotation/Zoom** | ✅ | ✅ |
+| **Auto-rotate** | ❌ | ✅ |
+| **Focus on USA button** | ❌ | ✅ |
+
+### Controls
+
+- **Smoothing (σ)**: Lower = sharper peaks, Higher = smoother terrain
+- **Peak Emphasis (power)**: Higher = more dramatic peaks
+- **Height/Extrusion Scale**: Vertical exaggeration factor
+- **Mouse drag**: Rotate view
+- **Scroll**: Zoom in/out
+
+### Static PDF Generation
+
+```bash
+# Generate publication-quality 3D density map
+.venv/bin/python us_density_map.py \
+    -i output/raw.tsv.gz \
+    -o output/results/us_density_3d_perspective.pdf \
+    --resolution 500 \
+    --sigma 0.8 \
+    --power 3.5
+
+# More peaky version
+.venv/bin/python us_density_map.py --sigma 0.5 --power 4.0
+
+# Smoother version  
+.venv/bin/python us_density_map.py --sigma 2.0 --power 2.0
+```
+
+
 ## Example Usage in Python
 
 ```python
