@@ -1056,13 +1056,14 @@ def generate_html(density_data: dict, default_sigma: float = 1.0, default_power:
         }
         
         function gaussianBlur(data, width, height, sigma) {
-            // Sigma is a fraction of the image width (0-0.5 range means 0-50% of width)
-            // Scale sigma to actual pixels based on width
-            const pixelSigma = sigma * width;
+            // Sigma slider is 0-0.5. Scale to reasonable pixel values:
+            // 0 = no blur, 0.5 = moderate blur (~2% of width)
+            // This gives 0-58 pixels on a 2880-wide histogram
+            const pixelSigma = sigma * width * 0.04;
             
             if (pixelSigma < 0.5) return data.slice();  // Skip if less than half a pixel
             
-            const kernelSize = Math.ceil(pixelSigma * 3) * 2 + 1;
+            const kernelSize = Math.min(101, Math.ceil(pixelSigma * 3) * 2 + 1);  // Cap kernel size
             const kernel = [];
             const half = Math.floor(kernelSize / 2);
             let sum = 0;
@@ -1496,7 +1497,13 @@ def generate_html(density_data: dict, default_sigma: float = 1.0, default_power:
             camera.position.set(0, 0, 15);
             camera.lookAt(0, 0, 0);
             
-            renderer = new THREE.WebGLRenderer({ antialias: true });
+            renderer = new THREE.WebGLRenderer({ 
+                antialias: true,
+                alpha: false,
+                powerPreference: 'high-performance',
+                failIfMajorPerformanceCaveat: false,  // Allow software rendering fallback
+                preserveDrawingBuffer: true  // Better compatibility with some browsers
+            });
             renderer.setSize(window.innerWidth, window.innerHeight);
             renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
             container.appendChild(renderer.domElement);
@@ -1953,7 +1960,13 @@ def generate_html(density_data: dict, default_sigma: float = 1.0, default_power:
             localCamera.lookAt(0, 0, 0);
             
             // Renderer
-            localRenderer = new THREE.WebGLRenderer({ antialias: true });
+            localRenderer = new THREE.WebGLRenderer({ 
+                antialias: true,
+                alpha: false,
+                powerPreference: 'high-performance',
+                failIfMajorPerformanceCaveat: false,
+                preserveDrawingBuffer: true
+            });
             localRenderer.setSize(width, height);
             localRenderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
             container.appendChild(localRenderer.domElement);
@@ -2122,7 +2135,7 @@ def generate_html(density_data: dict, default_sigma: float = 1.0, default_power:
             if (localSettings.showMapOverlay && currentLocalData) {
                 // Create a canvas to render map tiles
                 const mapCanvas = document.createElement('canvas');
-                const canvasSize = 1024;  // Higher resolution canvas
+                const canvasSize = 2048;  // High resolution canvas for detailed maps
                 mapCanvas.width = canvasSize;
                 mapCanvas.height = canvasSize;
                 const ctx = mapCanvas.getContext('2d');
@@ -2139,8 +2152,8 @@ def generate_html(density_data: dict, default_sigma: float = 1.0, default_power:
                 const lonSpan = b.lon_max - b.lon_min;
                 const maxSpan = Math.max(latSpan, lonSpan);
                 // Zoom level where 1 tile ≈ 360/2^zoom degrees
-                // Higher zoom = more detail. For ~100km regions, zoom 11-14 is good
-                const zoom = Math.max(10, Math.min(16, Math.floor(Math.log2(360 / maxSpan))));
+                // Higher zoom = more detail. For ~100km regions, zoom 13-16 is ideal
+                const zoom = Math.max(12, Math.min(18, Math.floor(Math.log2(360 / maxSpan)) + 1));
                 
                 // Calculate tile bounds
                 const n = Math.pow(2, zoom);
@@ -2280,7 +2293,25 @@ def generate_html(density_data: dict, default_sigma: float = 1.0, default_power:
         }
         
         async function init() {
-            initScene();
+            // Check WebGL availability
+            const canvas = document.createElement('canvas');
+            const gl = canvas.getContext('webgl') || canvas.getContext('experimental-webgl');
+            if (!gl) {
+                document.getElementById('loading').innerHTML = 
+                    `<p style="color: #e94560;">WebGL is not supported in this browser.<br>
+                    Please try Safari, Chrome, or Firefox.</p>`;
+                return;
+            }
+            
+            try {
+                initScene();
+            } catch (e) {
+                console.error('Failed to initialize 3D scene:', e);
+                document.getElementById('loading').innerHTML = 
+                    `<p style="color: #e94560;">Failed to initialize 3D graphics.<br>
+                    Error: ${e.message}</p>`;
+                return;
+            }
             
             try {
                 const compressed = Uint8Array.from(atob(EMBEDDED_DATA), c => c.charCodeAt(0));
@@ -2343,8 +2374,8 @@ def main():
                         help=f'Rows per chunk (default: {DEFAULT_CHUNK_SIZE:,})')
     parser.add_argument('--shapefile', default='output/cb_2020_us_county_500k.shp',
                         help='Shapefile for US state/county boundaries')
-    parser.add_argument('--sigma', type=float, default=0.1,
-                        help='Default smoothing sigma (0-0.5, lower = sharper)')
+    parser.add_argument('--sigma', type=float, default=0.0,
+                        help='Default smoothing sigma (0-0.5, 0 = sharp peaks, higher = smoother)')
     parser.add_argument('--power', type=float, default=2.0,
                         help='Default power exponent')
     parser.add_argument('--n-peaks', type=int, default=10,
