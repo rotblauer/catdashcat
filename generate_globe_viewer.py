@@ -32,6 +32,9 @@ DEFAULT_CHUNK_SIZE = 500_000
 
 def build_histograms_multi_resolution(input_file: str, resolutions: list, chunk_size: int) -> tuple:
     """Build 2D histograms at multiple resolutions in a single pass (global extent)."""
+    import time
+    start_time = time.time()
+
     histograms = {}
     edges = {}
     for res in resolutions:
@@ -44,9 +47,11 @@ def build_histograms_multi_resolution(input_file: str, resolutions: list, chunk_
         histograms[res] = np.zeros((res, res // 2), dtype=np.float32)
 
     total_points = 0
+    total_rows = 0
     chunks_processed = 0
 
-    print(f"Reading data in chunks of {chunk_size:,}...")
+    print(f"   Reading data in chunks of {chunk_size:,}...")
+    t0 = time.time()
 
     for chunk in pd.read_csv(
         input_file,
@@ -57,6 +62,9 @@ def build_histograms_multi_resolution(input_file: str, resolutions: list, chunk_
         chunksize=chunk_size,
         on_bad_lines='skip'
     ):
+        chunks_processed += 1
+        total_rows += len(chunk)
+
         chunk['lat'] = pd.to_numeric(chunk['lat'], errors='coerce')
         chunk['lon'] = pd.to_numeric(chunk['lon'], errors='coerce')
 
@@ -68,7 +76,6 @@ def build_histograms_multi_resolution(input_file: str, resolutions: list, chunk_
         filtered = chunk.loc[mask].dropna()
 
         if filtered.empty:
-            chunks_processed += 1
             continue
 
         lons = filtered['lon'].values
@@ -82,12 +89,14 @@ def build_histograms_multi_resolution(input_file: str, resolutions: list, chunk_
             histograms[res] += h.astype(np.float32)
 
         total_points += len(filtered)
-        chunks_processed += 1
 
         if chunks_processed % 10 == 0:
-            print(f"    Chunk {chunks_processed}: {total_points:,} points...")
+            elapsed = time.time() - t0
+            rate = total_rows / elapsed if elapsed > 0 else 0
+            print(f"      Chunk {chunks_processed}: {total_rows:,} rows, {total_points:,} valid ({rate/1e6:.2f}M rows/sec)")
 
-    print(f"✓ Finished: {total_points:,} points from {chunks_processed} chunks")
+    elapsed_total = time.time() - start_time
+    print(f"   ✓ Finished: {total_points:,} valid of {total_rows:,} rows in {elapsed_total:.1f}s ({total_rows/elapsed_total/1e6:.2f}M rows/sec)")
     return histograms, total_points
 
 
@@ -146,63 +155,60 @@ US_STATES = {
 
 
 def compute_state_counts(input_file: str, shapefile_path: str, chunk_size: int = 500_000) -> list:
-    """Compute point counts per US state using bounding box filtering then shapefile.
+    """Compute point counts per US state using fast vectorized geopandas spatial joins.
 
+    This is MUCH faster than point-by-point checking - uses R-tree spatial indexing.
     Returns a list of {state, abbrev, count, lat, lon} for states with data.
     """
+    import time
+    start_time = time.time()
+
     try:
-        import shapefile
-        from shapely.geometry import Point, shape as shapely_shape
-        from shapely.prepared import prep
+        import geopandas as gpd
+        from shapely.geometry import Point
+        from shapely.ops import unary_union
     except ImportError:
-        print("   ⚠ shapely not available for state counts")
+        print("   ⚠ geopandas not available for state counts")
         return []
-
-    # Load US state boundaries (need state-level data)
-    # The county shapefile has STATEFP as first field
-    sf = shapefile.Reader(shapefile_path)
-
-    # Build state geometries by merging counties
-    state_geometries = {}
-    skip_states = {'02', '15', '72', '78', '60', '66', '69'}  # Non-continental
-
-    print("   Loading state geometries...")
-    for shaperec in sf.iterShapeRecords():
-        record = shaperec.record
-        state_fip = str(record[0]).zfill(2) if record else ''
-
-        if state_fip in skip_states or state_fip not in US_STATES:
-            continue
-
-        try:
-            geom = shapely_shape(shaperec.shape.__geo_interface__)
-            if state_fip not in state_geometries:
-                state_geometries[state_fip] = []
-            state_geometries[state_fip].append(geom)
-        except Exception:
-            continue
-
-    # Merge geometries and prepare for fast querying
-    from shapely.ops import unary_union
-    prepared_states = {}
-    state_bounds = {}
-
-    for state_fip, geoms in state_geometries.items():
-        try:
-            merged = unary_union(geoms)
-            prepared_states[state_fip] = prep(merged)
-            state_bounds[state_fip] = merged.bounds  # (minx, miny, maxx, maxy)
-        except Exception:
-            continue
-
-    print(f"   Prepared {len(prepared_states)} state geometries")
-
-    # Count points per state
-    state_counts = {fip: 0 for fip in prepared_states}
-    total_checked = 0
 
     # US bounding box for quick filtering
     US_BOUNDS = (-125, 24, -66, 50)  # lon_min, lat_min, lon_max, lat_max
+    skip_states = {'02', '15', '72', '78', '60', '66', '69'}  # Non-continental
+
+    # Step 1: Load and prepare state geometries (merge counties into states)
+    print("   Loading state geometries...")
+    t0 = time.time()
+
+    try:
+        counties_gdf = gpd.read_file(shapefile_path)
+    except Exception as e:
+        print(f"   ⚠ Could not load shapefile: {e}")
+        return []
+
+    # Get state FIPS column (first column is typically STATEFP)
+    state_col = counties_gdf.columns[0]
+    counties_gdf['state_fip'] = counties_gdf[state_col].astype(str).str.zfill(2)
+
+    # Filter to continental US states we care about
+    counties_gdf = counties_gdf[
+        (~counties_gdf['state_fip'].isin(skip_states)) &
+        (counties_gdf['state_fip'].isin(US_STATES.keys()))
+    ]
+
+    # Dissolve counties into states
+    states_gdf = counties_gdf.dissolve(by='state_fip', as_index=False)
+    states_gdf = states_gdf[['state_fip', 'geometry']]
+
+    print(f"   ✓ Prepared {len(states_gdf)} state geometries ({time.time()-t0:.1f}s)")
+
+    # Step 2: Read points in chunks and do spatial joins
+    print("   Counting points per state (vectorized spatial join)...")
+    t0 = time.time()
+
+    state_counts = {fip: 0 for fip in US_STATES.keys()}
+    total_points = 0
+    us_points = 0
+    chunks_processed = 0
 
     for chunk in pd.read_csv(
         input_file,
@@ -213,40 +219,46 @@ def compute_state_counts(input_file: str, shapefile_path: str, chunk_size: int =
         chunksize=chunk_size,
         on_bad_lines='skip'
     ):
+        chunks_processed += 1
         chunk['lat'] = pd.to_numeric(chunk['lat'], errors='coerce')
         chunk['lon'] = pd.to_numeric(chunk['lon'], errors='coerce')
 
-        # Filter to US bounding box first
+        # Filter to US bounding box first (fast)
         mask = (
             chunk['lat'].between(US_BOUNDS[1], US_BOUNDS[3]) &
             chunk['lon'].between(US_BOUNDS[0], US_BOUNDS[2])
         )
         filtered = chunk.loc[mask].dropna()
+        total_points += len(chunk)
 
         if filtered.empty:
             continue
 
-        lats = filtered['lat'].values
-        lons = filtered['lon'].values
+        us_points += len(filtered)
 
-        for i in range(len(lats)):
-            lat, lon = lats[i], lons[i]
-            pt = Point(lon, lat)
+        # Convert to GeoDataFrame
+        geometry = gpd.points_from_xy(filtered['lon'], filtered['lat'])
+        points_gdf = gpd.GeoDataFrame(filtered, geometry=geometry, crs="EPSG:4326")
 
-            # Check each state (use bounds first for speed)
-            for state_fip, prepared in prepared_states.items():
-                bounds = state_bounds[state_fip]
-                if bounds[0] <= lon <= bounds[2] and bounds[1] <= lat <= bounds[3]:
-                    if prepared.contains(pt):
-                        state_counts[state_fip] += 1
-                        break
+        # Spatial join - this uses R-tree index, very fast
+        joined = gpd.sjoin(points_gdf, states_gdf, how='inner', predicate='within')
 
-        total_checked += len(filtered)
-        if total_checked % 500000 == 0:
-            print(f"      Checked {total_checked:,} points...")
+        # Count by state
+        if not joined.empty:
+            counts = joined['state_fip'].value_counts()
+            for state_fip, count in counts.items():
+                state_counts[state_fip] += count
+
+        if chunks_processed % 5 == 0:
+            elapsed = time.time() - t0
+            rate = total_points / elapsed if elapsed > 0 else 0
+            print(f"      Chunk {chunks_processed}: {total_points:,} total, {us_points:,} in US bbox ({rate/1e6:.2f}M pts/sec)")
+
+    print(f"   ✓ Processed {total_points:,} points, {us_points:,} in US ({time.time()-t0:.1f}s)")
 
     # Format results
     results = []
+    total_counted = 0
     for state_fip, count in state_counts.items():
         if count > 0 and state_fip in US_STATES:
             info = US_STATES[state_fip]
@@ -257,12 +269,18 @@ def compute_state_counts(input_file: str, shapefile_path: str, chunk_size: int =
                 'lat': info['lat'],
                 'lon': info['lon']
             })
+            total_counted += count
 
     # Sort by count descending
     results.sort(key=lambda x: x['count'], reverse=True)
-    print(f"   ✓ Found data in {len(results)} states")
+
+    elapsed_total = time.time() - start_time
+    print(f"   ✓ Found {total_counted:,} points in {len(results)} states ({elapsed_total:.1f}s total)")
 
     return results
+
+
+def extract_us_boundaries(shapefile_path: str, simplify_factor: int = 100) -> list:
     """Extract simplified US state/county boundaries for overlay."""
     try:
         import shapefile
@@ -502,11 +520,16 @@ def build_local_histograms_parallel(input_file: str, peaks: list, radius_km: flo
     Returns:
         Dictionary mapping peak index (as string) to local histogram data
     """
+    import time
+    start_time = time.time()
+
     local_views = {}
     print_lock = threading.Lock()
+    completed = [0]  # Use list for mutable counter in closure
 
     def process_peak(args):
         idx, peak = args
+        t0 = time.time()
         result = build_local_histogram(
             input_file,
             peak['lat'],
@@ -516,8 +539,10 @@ def build_local_histograms_parallel(input_file: str, peaks: list, radius_km: flo
             chunk_size=chunk_size,
             peak_index=idx
         )
+        elapsed = time.time() - t0
         with print_lock:
-            print(f"   ✓ Peak {idx+1}: ({peak['lat']:.2f}, {peak['lon']:.2f}) - {result['total_points']:,} points")
+            completed[0] += 1
+            print(f"   ✓ Peak {idx+1}/{len(peaks)}: ({peak['lat']:.2f}, {peak['lon']:.2f}) - {result['total_points']:,} points ({elapsed:.1f}s)")
         return idx, result
 
     # Use ThreadPoolExecutor for parallel I/O
@@ -527,6 +552,10 @@ def build_local_histograms_parallel(input_file: str, peaks: list, radius_km: flo
         for future in as_completed(futures):
             idx, result = future.result()
             local_views[str(idx)] = result
+
+    elapsed_total = time.time() - start_time
+    total_points = sum(v['total_points'] for v in local_views.values())
+    print(f"   ✓ All {len(peaks)} local views complete: {total_points:,} total points ({elapsed_total:.1f}s)")
 
     return local_views
 
@@ -688,7 +717,7 @@ def generate_html(density_data: dict, default_sigma: float = 0.0, default_power:
         
         .hint { font-size: 9px; color: #666; margin-top: 2px; font-style: italic; }
         
-        #focus-btn, #side-view-btn, #reset-view-btn {
+        #focus-btn, #side-view-btn, #reset-view-btn, #toggle-chart-btn {
             width: 100%;
             padding: 8px;
             margin-top: 8px;
@@ -701,13 +730,16 @@ def generate_html(density_data: dict, default_sigma: float = 0.0, default_power:
             transition: background 0.2s;
         }
         
-        #focus-btn:hover, #side-view-btn:hover, #reset-view-btn:hover { background: #ff6b6b; }
+        #focus-btn:hover, #side-view-btn:hover, #reset-view-btn:hover, #toggle-chart-btn:hover { background: #ff6b6b; }
         
         #side-view-btn { background: #4a90d9; }
         #side-view-btn:hover { background: #6ba8e8; }
         
         #reset-view-btn { background: #666; }
         #reset-view-btn:hover { background: #888; }
+        
+        #toggle-chart-btn { background: #9b59b6; }
+        #toggle-chart-btn:hover { background: #b877ce; }
         
         /* Peak labels panel */
         #peaks-panel {
@@ -1066,6 +1098,7 @@ def generate_html(density_data: dict, default_sigma: float = 0.0, default_power:
             <button id="focus-btn">🇺🇸 Focus on USA</button>
             <button id="side-view-btn">↔️ Side View</button>
             <button id="reset-view-btn">🔄 Reset View</button>
+            <button id="toggle-chart-btn">📊 Toggle State Chart</button>
         </div>
         
         <div id="peaks-panel" class="hidden">
@@ -1953,6 +1986,7 @@ def generate_html(density_data: dict, default_sigma: float = 0.0, default_power:
             document.getElementById('focus-btn').addEventListener('click', focusOnUSA);
             document.getElementById('side-view-btn').addEventListener('click', sideView);
             document.getElementById('reset-view-btn').addEventListener('click', resetView);
+            document.getElementById('toggle-chart-btn').addEventListener('click', toggleSatelliteChart);
             
             document.getElementById('point-count').textContent = 
                 densityData.total_points.toLocaleString();
@@ -2724,8 +2758,12 @@ def main():
         'total_points': 0
     }
 
+    import time
+    overall_start = time.time()
+
     # Compute histograms
     print(f"\n📊 Computing global histograms at {len(args.resolutions)} resolutions...")
+    print(f"   Resolutions: {args.resolutions}")
     histograms, total_points = build_histograms_multi_resolution(
         args.input, args.resolutions, args.chunk_size
     )
@@ -2740,10 +2778,12 @@ def main():
 
     # Find top peaks
     print(f"\n🏔️  Finding top {args.n_peaks} peaks...")
+    t0 = time.time()
     peaks = find_top_peaks(histograms, n_peaks=args.n_peaks)
     density_data['peaks'] = peaks
     for i, peak in enumerate(peaks):
         print(f"   {i+1}. ({peak['lat']:.2f}, {peak['lon']:.2f}) - {peak['count']:,} observations")
+    print(f"   ✓ Peak detection complete ({time.time()-t0:.1f}s)")
 
     # Build local high-resolution histograms for each peak (parallel)
     print(f"\n🔍 Building local views ({args.local_radius*2:.0f}km × {args.local_radius*2:.0f}km regions) using {args.workers} workers...")
@@ -2758,6 +2798,7 @@ def main():
 
     # Extract boundaries (US states + world countries if available)
     print(f"\n🗺️  Extracting boundaries...")
+    t0 = time.time()
     boundaries = []
 
     # World boundaries first (if available)
@@ -2773,7 +2814,7 @@ def main():
         print(f"   ✓ {len(us_boundaries)} US boundary polygons")
 
     density_data['boundaries'] = boundaries
-    print(f"   Total: {len(boundaries)} boundary polygons")
+    print(f"   Total: {len(boundaries)} boundary polygons ({time.time()-t0:.1f}s)")
 
     # Compute state counts for satellite bar chart
     print(f"\n📊 Computing US state counts for satellite chart...")
@@ -2781,15 +2822,18 @@ def main():
         state_counts = compute_state_counts(args.input, args.shapefile, args.chunk_size)
         density_data['state_counts'] = state_counts
         if state_counts:
-            top_3 = state_counts[:3]
-            for sc in top_3:
-                print(f"   {sc['abbrev']}: {sc['count']:,}")
+            print(f"   Top 3 states:")
+            for sc in state_counts[:3]:
+                print(f"      {sc['abbrev']}: {sc['count']:,}")
     except Exception as e:
         print(f"   ⚠ Could not compute state counts: {e}")
+        import traceback
+        traceback.print_exc()
         density_data['state_counts'] = []
 
     # Generate HTML
     print(f"\n📄 Generating static HTML globe viewer...")
+    t0 = time.time()
     html_content = generate_html(density_data, args.sigma, args.power)
 
     output_path = Path(args.output)
@@ -2799,9 +2843,10 @@ def main():
         f.write(html_content)
 
     size_mb = output_path.stat().st_size / (1024 * 1024)
-    print(f"   ✓ Output: {args.output} ({size_mb:.2f} MB)")
+    print(f"   ✓ Output: {args.output} ({size_mb:.2f} MB) ({time.time()-t0:.1f}s)")
 
-    print(f"\n🎉 Done! Open the HTML file directly in a browser:")
+    elapsed_total = time.time() - overall_start
+    print(f"\n🎉 Done in {elapsed_total:.1f}s! Open the HTML file directly in a browser:")
     print(f"   open {args.output}")
 
 

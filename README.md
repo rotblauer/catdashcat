@@ -15,6 +15,7 @@ Generate stunning, self-contained 3D globe visualizations from GPS tracking data
 - 🗺️ **Natural Earth base maps** - Beautiful satellite-style backgrounds
 - 🏔️ **Top 10 Peak Locations** - Click to zoom into 100km local views
 - 🗾 **OpenStreetMap overlays** - Geographic context in local views
+- 📊 **Satellite Bar Chart** - Floating 3D chart showing US state counts
 - 📁 **Self-contained HTML** - Single ~5MB file, works offline
 - ⚡ **WebGL accelerated** - Smooth 60fps with millions of points
 - 🔧 **Real-time controls** - Adjust smoothing, peak height, threshold
@@ -31,14 +32,12 @@ pip install -r requirements.txt
 # 3. Generate interactive globe viewer
 .venv/bin/python generate_globe_viewer.py \
     -i output/raw.tsv.gz \
-    -o output/viewer/globe_viewer.html \
     --resolutions 720 1440 \
-    --sigma 0.05 \
     --n-peaks 10 \
     --workers 4
 
-# 4. Open in browser
-open output/viewer/globe_viewer.html
+# 4. Open in browser (default output: docs/index.html)
+open docs/index.html
 ```
 
 ## Command Line Options
@@ -48,10 +47,10 @@ open output/viewer/globe_viewer.html
 
 Options:
   -i, --input           Input TSV file (default: output/raw.tsv.gz)
-  -o, --output          Output HTML file (default: output/viewer/globe_viewer.html)
+  -o, --output          Output HTML file (default: docs/index.html)
   --resolutions         Resolution levels to compute (default: 180 360 720 1440 2880)
                         Higher = more detail. 360 = 1° bins, 1440 = 0.25° bins
-  --sigma               Default smoothing (0-0.5, default: 0.1)
+  --sigma               Default smoothing (0-0.5, default: 0)
                         Lower = sharper peaks, 0 = raw data
   --power               Peak height exponent (default: 2.0)
                         Higher = more dramatic peaks
@@ -95,6 +94,7 @@ Options:
 - **Threshold** - Minimum density to display
 - **Base Map** - Dark / Natural Earth / Topography
 - **Auto Rotate** - Continuous slow rotation
+- **Toggle State Chart** - Show/hide floating US state counts bar chart
 
 ### Local Peak Views
 Click any peak in the sidebar to zoom into a 100km×100km region:
@@ -132,8 +132,10 @@ Input JSON format (newline-delimited GeoJSON features):
 ### 2. Generate Viewer
 
 ```bash
-.venv/bin/python generate_globe_viewer.py -i output/raw.tsv.gz -o output/viewer/globe_viewer.html
+.venv/bin/python generate_globe_viewer.py -i output/raw.tsv.gz
 ```
+
+Output: `docs/index.html` (self-contained, ready for GitHub Pages)
 
 ### 3. Deploy
 
