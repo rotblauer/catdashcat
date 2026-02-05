@@ -8,7 +8,7 @@ Example usage:
     python generate_globe_viewer.py -i output/raw.tsv.gz -o output/viewer/globe_viewer.html
     python generate_globe_viewer.py --resolutions 100 250 500 --sigma 1.2 --power 2.5
     .venv/bin/python generate_globe_viewer.py --resolutions 180 360 720
-    .venv/bin/python generate_globe_viewer.py --resolutions 720 1440 2880 --sigma 0.01  --n-peaks 10 --local-resolution 600 --workers 10
+    .venv/bin/python generate_globe_viewer.py --resolutions 2880 --sigma 0.01  --n-peaks 10 --local-resolution 600 --workers 10
 
 """
 
