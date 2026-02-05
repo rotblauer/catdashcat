@@ -720,16 +720,16 @@ def generate_html(density_data: dict, default_sigma: float = 1.0, default_power:
             <div class="control-group">
                 <label>Auto Rotate</label>
                 <select id="auto-rotate">
-                    <option value="false" selected>Off</option>
-                    <option value="true">On</option>
+                    <option value="false">Off</option>
+                    <option value="true" selected>On</option>
                 </select>
             </div>
             
             <div class="control-group">
                 <label>Base Map</label>
                 <select id="base-map">
-                    <option value="dark" selected>Dark</option>
-                    <option value="natural">Natural Earth</option>
+                    <option value="dark">Dark</option>
+                    <option value="natural" selected>Natural Earth</option>
                     <option value="topo">Topography</option>
                 </select>
             </div>
@@ -829,8 +829,8 @@ def generate_html(density_data: dict, default_sigma: float = 1.0, default_power:
             heightScale: 0.25,  // Taller peaks by default
             threshold: 0.02,    // Minimum density to show
             showBoundaries: true,
-            autoRotate: false,
-            baseMap: 'dark'     // 'dark', 'natural', 'topo'
+            autoRotate: true,   // Auto-rotate on by default
+            baseMap: 'natural'  // 'dark', 'natural', 'topo'
         };
         
         // Color gradient for density - vibrant peaks on dark background
@@ -1321,7 +1321,7 @@ def generate_html(density_data: dict, default_sigma: float = 1.0, default_power:
             controls.dampingFactor = 0.05;
             controls.minDistance = GLOBE_RADIUS * 1.2;  // Allow closer zoom
             controls.maxDistance = GLOBE_RADIUS * 15;   // Allow further zoom out
-            controls.autoRotate = false;
+            controls.autoRotate = settings.autoRotate;  // Use default from settings
             controls.autoRotateSpeed = 0.5;
             // Allow full rotation - no angle restrictions
             controls.minPolarAngle = 0;           // Can look from top
@@ -1341,8 +1341,8 @@ def generate_html(density_data: dict, default_sigma: float = 1.0, default_power:
             fillLight.position.set(-5, -5, -5);
             scene.add(fillLight);
             
-            // Create globe
-            globeMesh = createGlobe();
+            // Create globe with default base map
+            globeMesh = createGlobe(settings.baseMap);
             scene.add(globeMesh);
             
             atmosphereMesh = createAtmosphere();
@@ -1823,36 +1823,79 @@ def generate_html(density_data: dict, default_sigma: float = 1.0, default_power:
             if (localSettings.showMapOverlay && currentLocalData) {
                 // Create a canvas to render map tiles
                 const mapCanvas = document.createElement('canvas');
-                mapCanvas.width = 512;
-                mapCanvas.height = 512;
+                const canvasSize = 512;
+                mapCanvas.width = canvasSize;
+                mapCanvas.height = canvasSize;
                 const ctx = mapCanvas.getContext('2d');
                 
                 // Fill with base color first
                 ctx.fillStyle = '#2a3a5a';
-                ctx.fillRect(0, 0, 512, 512);
+                ctx.fillRect(0, 0, canvasSize, canvasSize);
                 
-                // Load OSM tiles for the region
+                // Get data bounds
                 const b = currentLocalData.bounds;
-                const centerLat = (b.lat_min + b.lat_max) / 2;
-                const centerLon = (b.lon_min + b.lon_max) / 2;
-                const zoom = 10; // Appropriate zoom for ~100km region
                 
-                // Calculate tile coordinates
-                const tileX = Math.floor((centerLon + 180) / 360 * Math.pow(2, zoom));
-                const tileY = Math.floor((1 - Math.log(Math.tan(centerLat * Math.PI / 180) + 1 / Math.cos(centerLat * Math.PI / 180)) / Math.PI) / 2 * Math.pow(2, zoom));
+                // Calculate appropriate zoom level based on region size
+                const latSpan = b.lat_max - b.lat_min;
+                const lonSpan = b.lon_max - b.lon_min;
+                const maxSpan = Math.max(latSpan, lonSpan);
+                // Zoom level where 1 tile ≈ 360/2^zoom degrees
+                const zoom = Math.max(8, Math.min(12, Math.floor(Math.log2(360 / maxSpan)) - 1));
                 
-                // Create texture from canvas (will be updated when tile loads)
+                // Calculate tile bounds
+                const n = Math.pow(2, zoom);
+                const minTileX = Math.floor((b.lon_min + 180) / 360 * n);
+                const maxTileX = Math.floor((b.lon_max + 180) / 360 * n);
+                const minTileY = Math.floor((1 - Math.log(Math.tan(b.lat_max * Math.PI / 180) + 1 / Math.cos(b.lat_max * Math.PI / 180)) / Math.PI) / 2 * n);
+                const maxTileY = Math.floor((1 - Math.log(Math.tan(b.lat_min * Math.PI / 180) + 1 / Math.cos(b.lat_min * Math.PI / 180)) / Math.PI) / 2 * n);
+                
+                // Create texture from canvas
                 const texture = new THREE.CanvasTexture(mapCanvas);
                 texture.needsUpdate = true;
                 
-                // Load the tile
-                const tileImg = new Image();
-                tileImg.crossOrigin = 'anonymous';
-                tileImg.onload = () => {
-                    ctx.drawImage(tileImg, 0, 0, 512, 512);
-                    texture.needsUpdate = true;
+                // Calculate tile extent in lat/lon
+                const tile2lon = (x, z) => x / Math.pow(2, z) * 360 - 180;
+                const tile2lat = (y, z) => {
+                    const n = Math.PI - 2 * Math.PI * y / Math.pow(2, z);
+                    return 180 / Math.PI * Math.atan(0.5 * (Math.exp(n) - Math.exp(-n)));
                 };
-                tileImg.src = `https://tile.openstreetmap.org/${zoom}/${tileX}/${tileY}.png`;
+                
+                // Load tiles and draw them correctly positioned
+                const numTilesX = maxTileX - minTileX + 1;
+                const numTilesY = maxTileY - minTileY + 1;
+                const tileSize = canvasSize / Math.max(numTilesX, numTilesY);
+                
+                let tilesLoaded = 0;
+                const totalTiles = numTilesX * numTilesY;
+                
+                for (let tx = minTileX; tx <= maxTileX; tx++) {
+                    for (let ty = minTileY; ty <= maxTileY; ty++) {
+                        const tileImg = new Image();
+                        tileImg.crossOrigin = 'anonymous';
+                        
+                        // Calculate tile bounds
+                        const tileLonMin = tile2lon(tx, zoom);
+                        const tileLonMax = tile2lon(tx + 1, zoom);
+                        const tileLatMax = tile2lat(ty, zoom);
+                        const tileLatMin = tile2lat(ty + 1, zoom);
+                        
+                        // Calculate position in canvas (normalized to data bounds)
+                        const canvasX = (tileLonMin - b.lon_min) / lonSpan * canvasSize;
+                        const canvasY = (b.lat_max - tileLatMax) / latSpan * canvasSize;
+                        const canvasW = (tileLonMax - tileLonMin) / lonSpan * canvasSize;
+                        const canvasH = (tileLatMax - tileLatMin) / latSpan * canvasSize;
+                        
+                        tileImg.onload = () => {
+                            ctx.drawImage(tileImg, canvasX, canvasY, canvasW, canvasH);
+                            tilesLoaded++;
+                            texture.needsUpdate = true;
+                        };
+                        tileImg.onerror = () => {
+                            tilesLoaded++;
+                        };
+                        tileImg.src = `https://tile.openstreetmap.org/${zoom}/${tx}/${ty}.png`;
+                    }
+                }
                 
                 planeMat = new THREE.MeshBasicMaterial({ 
                     map: texture,

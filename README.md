@@ -1,201 +1,186 @@
+# CatDash - Interactive 3D Globe Viewer for GPS Data
 
-# CatDash - Geospatial Analysis for Cat Tracking Data
+Generate stunning, self-contained 3D globe visualizations from GPS tracking data. The output is a single HTML file that runs entirely in the browser - no server required. Perfect for sharing, GitHub Pages, or serving from simple hardware like a Raspberry Pi.
 
-Scalable geospatial analysis toolkit for millions of GPS tracking points. Implements both standard spatial analysis methods and creative/advanced techniques.
+![Globe Preview](output/viewer/globe_preview.png)
+
+## Features
+
+- 🌍 **Interactive 3D Globe** - Pan, zoom, rotate with mouse/touch
+- 📊 **Multi-resolution density peaks** - See patterns at different scales  
+- 🗺️ **Natural Earth base maps** - Beautiful satellite-style backgrounds
+- 🏔️ **Top 10 Peak Locations** - Click to zoom into 100km local views
+- 🗾 **OpenStreetMap overlays** - Geographic context in local views
+- 📁 **Self-contained HTML** - Single ~5MB file, works offline
+- ⚡ **WebGL accelerated** - Smooth 60fps with millions of points
+- 🔧 **Real-time controls** - Adjust smoothing, peak height, threshold
 
 ## Quick Start
 
 ```bash
-# Install dependencies
+# 1. Install dependencies
 pip install -r requirements.txt
 
-# Run full analysis suite with 10% sample
-.venv/bin/python run_analysis.py -i output/raw.tsv.gz -o output/results -s 0.1 --visualize
+# 2. Generate input data (from GPS JSON stream)
+./run.sh < input.json
 
-# Run only standard analysis
-python run_analysis.py -i output/raw.tsv.gz -o output/results -a standard
-
-# Run only advanced analysis
-python run_analysis.py -i output/raw.tsv.gz -o output/results -a advanced
-
-# Quick test with limited rows
-python run_analysis.py -i output/raw.tsv.gz -o output/test -n 10000
-```
-
-## Analysis Methods
-
-### Standard Analysis (`geospatial_analysis.py`)
-
-| Method | Class | Description |
-|--------|-------|-------------|
-| **Spatial Clustering** | `SpatialClustering` | DBSCAN with haversine distance, Geohash + K-means |
-| **Hotspot Analysis** | `HotspotAnalysis` | Kernel Density Estimation, Getis-Ord Gi* |
-| **Movement Patterns** | `MovementPatterns` | Stay point detection, speed statistics, trajectory segmentation |
-| **Home Range** | `HomeRangeEstimation` | Minimum Convex Polygon (MCP), Utilization Distribution |
-| **Temporal Patterns** | `TemporalPatterns` | Hour×Day heatmaps, circadian rhythms, seasonal patterns |
-| **Grid Aggregation** | `GridAggregation` | Geohash cells, hexagonal grids |
-| **Spatial Statistics** | `SpatialStatistics` | Global Moran's I autocorrelation |
-
-### Advanced Analysis (`advanced_analysis.py`)
-
-| Method | Class | Description |
-|--------|-------|-------------|
-| **Space-Time Cube** | `SpaceTimeCube` | Temporal hotspot detection with Mann-Kendall trends |
-| **Movement Network** | `MovementNetwork` | Transition graphs, hub/connector identification |
-| **Behavioral States** | `BehavioralStateClassification` | GMM-based state classification (Resting, Foraging, Traveling) |
-| **Anomaly Detection** | `AnomalyDetection` | Isolation Forest spatial anomalies, speed outliers |
-| **Territory Analysis** | `TerritoryAnalysis` | Jaccard overlap, Voronoi tessellation |
-| **Point Patterns** | `RipleysK` | Ripley's K function for clustering detection |
-| **Flow Analysis** | `FlowAnalysis` | Origin-destination flows, corridor identification |
-
-### Creative Analysis (`creative_analysis.py`)
-
-Creative visualization techniques for exploring spatial patterns.
-
-## Interactive 3D Viewers (WebGL)
-
-High-performance, interactive 3D viewers for exploring density patterns. Both generate **self-contained static HTML files** that can be opened directly in any browser - perfect for sharing, GitHub Pages, or serving from simple hardware like a Raspberry Pi.
-
-### US Flat Map Viewer
-
-```bash
-# Generate static HTML viewer (no server needed!)
-.venv/bin/python generate_static_viewer.py -i output/raw.tsv.gz -o output/viewer/density_viewer.html
-
-# Open directly in browser
-open output/viewer/density_viewer.html
-
-# With custom resolutions (larger file, more detail)
-.venv/bin/python generate_static_viewer.py --resolutions 100 250 500
-```
-
-### Global Globe Viewer 🌍
-
-```bash
-# Generate interactive 3D globe
-.venv/bin/python generate_globe_viewer.py -i output/raw.tsv.gz -o output/viewer/globe_viewer.html
-
-# Open directly in browser  
-open output/viewer/globe_viewer.html
-
-# With higher resolution
-.venv/bin/python generate_globe_viewer.py --resolutions 180 360 720
-```
-
-### Viewer Features
-
-| Feature | Flat Map | Globe |
-|---------|----------|-------|
-| **Self-contained HTML** | ✅ ~3 MB | ✅ ~5 MB |
-| **No server needed** | ✅ | ✅ |
-| **Dynamic Resolution** | 100-1000 | 180-720 |
-| **Real-time Smoothing (σ)** | ✅ | ✅ |
-| **Peak Emphasis (power)** | ✅ | ✅ |
-| **US State Boundaries** | ✅ | ✅ |
-| **3D Rotation/Zoom** | ✅ | ✅ |
-| **Auto-rotate** | ❌ | ✅ |
-| **Focus on USA button** | ❌ | ✅ |
-
-### Controls
-
-- **Smoothing (σ)**: Lower = sharper peaks, Higher = smoother terrain
-- **Peak Emphasis (power)**: Higher = more dramatic peaks
-- **Height/Extrusion Scale**: Vertical exaggeration factor
-- **Mouse drag**: Rotate view
-- **Scroll**: Zoom in/out
-
-### Static PDF Generation
-
-```bash
-# Generate publication-quality 3D density map
-.venv/bin/python us_density_map.py \
+# 3. Generate interactive globe viewer
+.venv/bin/python generate_globe_viewer.py \
     -i output/raw.tsv.gz \
-    -o output/results/us_density_3d_perspective.pdf \
-    --resolution 500 \
-    --sigma 0.8 \
-    --power 3.5
+    -o output/viewer/globe_viewer.html \
+    --resolutions 720 1440 \
+    --sigma 0.05 \
+    --n-peaks 10 \
+    --workers 4
 
-# More peaky version
-.venv/bin/python us_density_map.py --sigma 0.5 --power 4.0
-
-# Smoother version  
-.venv/bin/python us_density_map.py --sigma 2.0 --power 2.0
+# 4. Open in browser
+open output/viewer/globe_viewer.html
 ```
 
+## Command Line Options
 
-## Example Usage in Python
+```bash
+.venv/bin/python generate_globe_viewer.py [OPTIONS]
 
-```python
-from geospatial_analysis import load_data, SpatialClustering, HotspotAnalysis
-from advanced_analysis import BehavioralStateClassification, MovementNetwork
-
-# Load data
-df = load_data('output/raw.tsv.gz', sample_frac=0.1)
-
-# Clustering
-labels, geohash_stats = SpatialClustering.geohash_kmeans(df, n_clusters=50)
-
-# Hotspot analysis  
-hotspots = HotspotAnalysis.getis_ord_gi(df, geohash_precision=6)
-
-# Behavioral states
-df_states = BehavioralStateClassification.classify_states(df, n_states=4)
-
-# Movement network
-nodes, edges = MovementNetwork.build_transition_network(df)
-nodes = MovementNetwork.find_hubs_and_connectors(nodes, edges)
+Options:
+  -i, --input           Input TSV file (default: output/raw.tsv.gz)
+  -o, --output          Output HTML file (default: output/viewer/globe_viewer.html)
+  --resolutions         Resolution levels to compute (default: 180 360 720 1440 2880)
+                        Higher = more detail. 360 = 1° bins, 1440 = 0.25° bins
+  --sigma               Default smoothing (0-0.5, default: 0.1)
+                        Lower = sharper peaks, 0 = raw data
+  --power               Peak height exponent (default: 2.0)
+                        Higher = more dramatic peaks
+  --n-peaks             Number of top peaks for local views (default: 10)
+  --local-radius        Radius in km for local views (default: 50 = 100km×100km)
+  --local-resolution    Resolution for local histograms (default: 200)
+  --workers             Parallel workers for local histograms (default: 4)
+  --chunk-size          Rows per chunk when reading (default: 500,000)
+  --shapefile           US state/county boundaries shapefile
 ```
 
-## Output Files
+## Examples
 
-The analysis generates the following files:
+```bash
+# High resolution with sharp peaks
+.venv/bin/python generate_globe_viewer.py \
+    --resolutions 720 1440 2880 \
+    --sigma 0.01 \
+    --n-peaks 10 \
+    --workers 5
 
-### Standard Analysis (`output/standard/`)
-- `geohash_clusters.csv` - Cluster assignments
-- `hotspots.csv` - Getis-Ord Gi* hotspot results
-- `speed_stats.csv` - Speed by hour/day/activity
-- `hourly_activity_matrix.csv` - Hour × day-of-week activity
-- `activity_rhythm.csv` - Circadian activity patterns
-- `seasonal_patterns.csv` - Seasonal movement patterns
-- `geohash_aggregation.csv` - Grid-aggregated statistics
-- `analysis_summary.json` - Summary statistics
-- `enriched_data.csv.gz` - Data with cluster labels
+# Quick preview (lower resolution)
+.venv/bin/python generate_globe_viewer.py \
+    --resolutions 180 360 \
+    --n-peaks 5
 
-### Advanced Analysis (`output/advanced/`)
-- `emerging_hotspots.csv` - Space-time emerging/diminishing hotspots
-- `network_nodes.csv` / `network_edges.csv` - Movement network
-- `behavioral_states.csv.gz` - Classified behavioral states
-- `anomalies.csv.gz` - Detected anomalies
-- `territory_overlap.csv` - Individual territory overlap
-- `ripleys_k.json` - Point pattern analysis results
-- `flow_matrix.csv` / `corridors.csv` - Movement flows
+# Smooth terrain visualization
+.venv/bin/python generate_globe_viewer.py \
+    --resolutions 360 720 \
+    --sigma 0.3 \
+    --power 1.5
+```
 
-### Visualizations (with `--visualize` flag)
-- `clusters_map.png` - Cluster visualization
-- `hotspots.png` - Hotspot map
-- `speed_stats.png` - Speed statistics
-- `hourly_heatmap.png` - Activity heatmap
-- `home_range.png` - MCP home range
-- `dashboard.png` - Summary dashboard
+## Viewer Controls
 
-## Data Format
+### Globe View
+- **Resolution** - Switch between computed detail levels
+- **Smoothing (σ)** - 0 = raw, higher = smoother terrain
+- **Peak Height** - Exponent for peak emphasis
+- **Extrusion Scale** - Vertical height multiplier
+- **Threshold** - Minimum density to display
+- **Base Map** - Dark / Natural Earth / Topography
+- **Auto Rotate** - Continuous slow rotation
 
-Input: Tab-separated gzipped file with columns:
-- `lat`, `lon` - Coordinates (required)
-- `Time` - ISO timestamp (optional, enables temporal analysis)
-- `Speed` - Movement speed (optional)
-- `Activity` - Activity type (optional)
-- `Name` - Individual identifier (optional, enables territory analysis)
-- `Heading` - Movement direction (optional)
+### Local Peak Views
+Click any peak in the sidebar to zoom into a 100km×100km region:
+- **3D density visualization** of the local area
+- **OpenStreetMap overlay** option for geographic context
+- **Independent controls** for local smoothing/height
 
-## Scalability
+### Mouse Controls
+- **Drag** - Rotate globe
+- **Scroll** - Zoom in/out
+- **Right-drag** - Pan view
 
-Designed for millions of data points:
-- Geohash-based aggregation reduces memory usage
-- Sampling options for quick exploration
-- BallTree for efficient spatial queries
-- Mini-batch algorithms for large datasets
+## Data Pipeline
 
-## Cat UMAPs (Original Analysis)
+### 1. Generate Raw Data
 
-![](docs/index_files/figure-html/unnamed-chunk-1-1.jpeg)<!-- -->![](docs/index_files/figure-html/unnamed-chunk-1-2.jpeg)<!-- -->![](docs/index_files/figure-html/unnamed-chunk-1-3.jpeg)<!-- -->![](docs/index_files/figure-html/unnamed-chunk-1-4.jpeg)<!-- -->![](docs/index_files/figure-html/unnamed-chunk-1-5.jpeg)<!-- -->![](docs/index_files/figure-html/unnamed-chunk-1-6.jpeg)<!-- -->![](docs/index_files/figure-html/unnamed-chunk-1-7.jpeg)<!-- -->![](docs/index_files/figure-html/unnamed-chunk-1-8.jpeg)<!-- -->![](docs/index_files/figure-html/unnamed-chunk-1-9.jpeg)<!-- -->![](docs/index_files/figure-html/unnamed-chunk-1-10.jpeg)<!-- -->![](docs/index_files/figure-html/unnamed-chunk-1-11.jpeg)<!-- -->
+The input pipeline uses Go for high-performance JSON parsing:
+
+```bash
+# Compile Go parser (one-time)
+go build -o catdash main.go
+
+# Stream GPS JSON to TSV
+./catdash < gps_data.json > output/raw.tsv
+
+# Or use the convenience script
+./run.sh < gps_data.json
+```
+
+Input JSON format (newline-delimited GeoJSON features):
+```json
+{"type":"Feature","geometry":{"type":"Point","coordinates":[-93.25,44.98]},"properties":{"Time":"2024-01-15T14:30:00Z","Speed":2.5,"Name":"Luna"}}
+```
+
+### 2. Generate Viewer
+
+```bash
+.venv/bin/python generate_globe_viewer.py -i output/raw.tsv.gz -o output/viewer/globe_viewer.html
+```
+
+### 3. Deploy
+
+The output HTML file is completely self-contained:
+- Copy to any web server
+- Open directly in browser (file://)
+- Host on GitHub Pages
+- Serve from Raspberry Pi
+
+## Input Data Format
+
+Tab-separated file with columns:
+- `lat` - Latitude (required)
+- `lon` - Longitude (required)
+- Additional columns are ignored
+
+## Boundary Data
+
+For US state/county boundaries, download from Census Bureau:
+```bash
+curl -L -o output/cb_2020_us_county_500k.zip \
+    "https://www2.census.gov/geo/tiger/GENZ2020/shp/cb_2020_us_county_500k.zip"
+unzip output/cb_2020_us_county_500k.zip -d output/
+```
+
+For world country boundaries (Natural Earth):
+```bash
+curl -L -o output/ne_110m_admin_0_countries.zip \
+    "https://naciscdn.org/naturalearth/110m/cultural/ne_110m_admin_0_countries.zip"
+unzip output/ne_110m_admin_0_countries.zip -d output/
+```
+
+## Requirements
+
+- Python 3.10+
+- pandas, numpy, geopandas
+- Modern browser with WebGL support
+
+## Performance
+
+Optimized for millions of data points:
+- Chunked file reading (configurable chunk size)
+- Multi-threaded local histogram computation
+- Sparse histogram storage (only non-zero cells)
+- WebGL rendering with efficient buffer geometry
+
+Typical performance:
+- 87M points → ~30 seconds for global histograms
+- 10 local views (parallel) → ~2 minutes
+- Output file size: 5-6 MB
+
+## License
+
+MIT
