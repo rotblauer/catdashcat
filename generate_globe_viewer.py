@@ -8,7 +8,7 @@ Example usage:
     python generate_globe_viewer.py -i output/raw.tsv.gz -o output/viewer/globe_viewer.html
     python generate_globe_viewer.py --resolutions 100 250 500 --sigma 1.2 --power 2.5
     .venv/bin/python generate_globe_viewer.py --resolutions 180 360 720
-    .venv/bin/python generate_globe_viewer.py --resolutions 2880 --sigma 0.01  --n-peaks 10 --local-resolution 600 --workers 10
+    .venv/bin/python generate_globe_viewer.py --resolutions 2880 11520 --sigma 0.01  --n-peaks 10 --local-resolution 1200 --workers 10
 
 """
 
@@ -91,7 +91,178 @@ def build_histograms_multi_resolution(input_file: str, resolutions: list, chunk_
     return histograms, total_points
 
 
-def extract_us_boundaries(shapefile_path: str, simplify_factor: int = 100) -> list:
+# US State FIPS codes to names and approximate centroids
+US_STATES = {
+    '01': {'name': 'Alabama', 'abbrev': 'AL', 'lat': 32.7, 'lon': -86.8},
+    '04': {'name': 'Arizona', 'abbrev': 'AZ', 'lat': 34.2, 'lon': -111.7},
+    '05': {'name': 'Arkansas', 'abbrev': 'AR', 'lat': 34.9, 'lon': -92.4},
+    '06': {'name': 'California', 'abbrev': 'CA', 'lat': 37.2, 'lon': -119.4},
+    '08': {'name': 'Colorado', 'abbrev': 'CO', 'lat': 39.0, 'lon': -105.5},
+    '09': {'name': 'Connecticut', 'abbrev': 'CT', 'lat': 41.6, 'lon': -72.7},
+    '10': {'name': 'Delaware', 'abbrev': 'DE', 'lat': 39.0, 'lon': -75.5},
+    '11': {'name': 'District of Columbia', 'abbrev': 'DC', 'lat': 38.9, 'lon': -77.0},
+    '12': {'name': 'Florida', 'abbrev': 'FL', 'lat': 28.6, 'lon': -82.4},
+    '13': {'name': 'Georgia', 'abbrev': 'GA', 'lat': 32.6, 'lon': -83.4},
+    '16': {'name': 'Idaho', 'abbrev': 'ID', 'lat': 44.4, 'lon': -114.6},
+    '17': {'name': 'Illinois', 'abbrev': 'IL', 'lat': 40.0, 'lon': -89.2},
+    '18': {'name': 'Indiana', 'abbrev': 'IN', 'lat': 39.9, 'lon': -86.3},
+    '19': {'name': 'Iowa', 'abbrev': 'IA', 'lat': 42.0, 'lon': -93.5},
+    '20': {'name': 'Kansas', 'abbrev': 'KS', 'lat': 38.5, 'lon': -98.4},
+    '21': {'name': 'Kentucky', 'abbrev': 'KY', 'lat': 37.5, 'lon': -85.3},
+    '22': {'name': 'Louisiana', 'abbrev': 'LA', 'lat': 31.0, 'lon': -91.9},
+    '23': {'name': 'Maine', 'abbrev': 'ME', 'lat': 45.4, 'lon': -69.2},
+    '24': {'name': 'Maryland', 'abbrev': 'MD', 'lat': 39.0, 'lon': -76.8},
+    '25': {'name': 'Massachusetts', 'abbrev': 'MA', 'lat': 42.2, 'lon': -71.5},
+    '26': {'name': 'Michigan', 'abbrev': 'MI', 'lat': 44.3, 'lon': -85.4},
+    '27': {'name': 'Minnesota', 'abbrev': 'MN', 'lat': 46.3, 'lon': -94.3},
+    '28': {'name': 'Mississippi', 'abbrev': 'MS', 'lat': 32.7, 'lon': -89.7},
+    '29': {'name': 'Missouri', 'abbrev': 'MO', 'lat': 38.4, 'lon': -92.5},
+    '30': {'name': 'Montana', 'abbrev': 'MT', 'lat': 47.0, 'lon': -109.6},
+    '31': {'name': 'Nebraska', 'abbrev': 'NE', 'lat': 41.5, 'lon': -99.8},
+    '32': {'name': 'Nevada', 'abbrev': 'NV', 'lat': 39.3, 'lon': -116.6},
+    '33': {'name': 'New Hampshire', 'abbrev': 'NH', 'lat': 43.7, 'lon': -71.6},
+    '34': {'name': 'New Jersey', 'abbrev': 'NJ', 'lat': 40.2, 'lon': -74.7},
+    '35': {'name': 'New Mexico', 'abbrev': 'NM', 'lat': 34.5, 'lon': -106.0},
+    '36': {'name': 'New York', 'abbrev': 'NY', 'lat': 43.0, 'lon': -75.5},
+    '37': {'name': 'North Carolina', 'abbrev': 'NC', 'lat': 35.5, 'lon': -79.4},
+    '38': {'name': 'North Dakota', 'abbrev': 'ND', 'lat': 47.4, 'lon': -100.3},
+    '39': {'name': 'Ohio', 'abbrev': 'OH', 'lat': 40.4, 'lon': -82.8},
+    '40': {'name': 'Oklahoma', 'abbrev': 'OK', 'lat': 35.6, 'lon': -97.5},
+    '41': {'name': 'Oregon', 'abbrev': 'OR', 'lat': 44.0, 'lon': -120.5},
+    '42': {'name': 'Pennsylvania', 'abbrev': 'PA', 'lat': 40.9, 'lon': -77.8},
+    '44': {'name': 'Rhode Island', 'abbrev': 'RI', 'lat': 41.7, 'lon': -71.5},
+    '45': {'name': 'South Carolina', 'abbrev': 'SC', 'lat': 33.9, 'lon': -80.9},
+    '46': {'name': 'South Dakota', 'abbrev': 'SD', 'lat': 44.4, 'lon': -100.2},
+    '47': {'name': 'Tennessee', 'abbrev': 'TN', 'lat': 35.8, 'lon': -86.3},
+    '48': {'name': 'Texas', 'abbrev': 'TX', 'lat': 31.5, 'lon': -99.4},
+    '49': {'name': 'Utah', 'abbrev': 'UT', 'lat': 39.3, 'lon': -111.7},
+    '50': {'name': 'Vermont', 'abbrev': 'VT', 'lat': 44.1, 'lon': -72.7},
+    '51': {'name': 'Virginia', 'abbrev': 'VA', 'lat': 37.5, 'lon': -78.8},
+    '53': {'name': 'Washington', 'abbrev': 'WA', 'lat': 47.4, 'lon': -120.5},
+    '54': {'name': 'West Virginia', 'abbrev': 'WV', 'lat': 38.9, 'lon': -80.5},
+    '55': {'name': 'Wisconsin', 'abbrev': 'WI', 'lat': 44.6, 'lon': -89.7},
+    '56': {'name': 'Wyoming', 'abbrev': 'WY', 'lat': 43.0, 'lon': -107.5},
+}
+
+
+def compute_state_counts(input_file: str, shapefile_path: str, chunk_size: int = 500_000) -> list:
+    """Compute point counts per US state using bounding box filtering then shapefile.
+
+    Returns a list of {state, abbrev, count, lat, lon} for states with data.
+    """
+    try:
+        import shapefile
+        from shapely.geometry import Point, shape as shapely_shape
+        from shapely.prepared import prep
+    except ImportError:
+        print("   ⚠ shapely not available for state counts")
+        return []
+
+    # Load US state boundaries (need state-level data)
+    # The county shapefile has STATEFP as first field
+    sf = shapefile.Reader(shapefile_path)
+
+    # Build state geometries by merging counties
+    state_geometries = {}
+    skip_states = {'02', '15', '72', '78', '60', '66', '69'}  # Non-continental
+
+    print("   Loading state geometries...")
+    for shaperec in sf.iterShapeRecords():
+        record = shaperec.record
+        state_fip = str(record[0]).zfill(2) if record else ''
+
+        if state_fip in skip_states or state_fip not in US_STATES:
+            continue
+
+        try:
+            geom = shapely_shape(shaperec.shape.__geo_interface__)
+            if state_fip not in state_geometries:
+                state_geometries[state_fip] = []
+            state_geometries[state_fip].append(geom)
+        except Exception:
+            continue
+
+    # Merge geometries and prepare for fast querying
+    from shapely.ops import unary_union
+    prepared_states = {}
+    state_bounds = {}
+
+    for state_fip, geoms in state_geometries.items():
+        try:
+            merged = unary_union(geoms)
+            prepared_states[state_fip] = prep(merged)
+            state_bounds[state_fip] = merged.bounds  # (minx, miny, maxx, maxy)
+        except Exception:
+            continue
+
+    print(f"   Prepared {len(prepared_states)} state geometries")
+
+    # Count points per state
+    state_counts = {fip: 0 for fip in prepared_states}
+    total_checked = 0
+
+    # US bounding box for quick filtering
+    US_BOUNDS = (-125, 24, -66, 50)  # lon_min, lat_min, lon_max, lat_max
+
+    for chunk in pd.read_csv(
+        input_file,
+        sep='\t',
+        compression='gzip',
+        usecols=['lat', 'lon'],
+        dtype={'lat': 'str', 'lon': 'str'},
+        chunksize=chunk_size,
+        on_bad_lines='skip'
+    ):
+        chunk['lat'] = pd.to_numeric(chunk['lat'], errors='coerce')
+        chunk['lon'] = pd.to_numeric(chunk['lon'], errors='coerce')
+
+        # Filter to US bounding box first
+        mask = (
+            chunk['lat'].between(US_BOUNDS[1], US_BOUNDS[3]) &
+            chunk['lon'].between(US_BOUNDS[0], US_BOUNDS[2])
+        )
+        filtered = chunk.loc[mask].dropna()
+
+        if filtered.empty:
+            continue
+
+        lats = filtered['lat'].values
+        lons = filtered['lon'].values
+
+        for i in range(len(lats)):
+            lat, lon = lats[i], lons[i]
+            pt = Point(lon, lat)
+
+            # Check each state (use bounds first for speed)
+            for state_fip, prepared in prepared_states.items():
+                bounds = state_bounds[state_fip]
+                if bounds[0] <= lon <= bounds[2] and bounds[1] <= lat <= bounds[3]:
+                    if prepared.contains(pt):
+                        state_counts[state_fip] += 1
+                        break
+
+        total_checked += len(filtered)
+        if total_checked % 500000 == 0:
+            print(f"      Checked {total_checked:,} points...")
+
+    # Format results
+    results = []
+    for state_fip, count in state_counts.items():
+        if count > 0 and state_fip in US_STATES:
+            info = US_STATES[state_fip]
+            results.append({
+                'state': info['name'],
+                'abbrev': info['abbrev'],
+                'count': count,
+                'lat': info['lat'],
+                'lon': info['lon']
+            })
+
+    # Sort by count descending
+    results.sort(key=lambda x: x['count'], reverse=True)
+    print(f"   ✓ Found data in {len(results)} states")
+
+    return results
     """Extract simplified US state/county boundaries for overlay."""
     try:
         import shapefile
@@ -360,7 +531,7 @@ def build_local_histograms_parallel(input_file: str, peaks: list, radius_km: flo
     return local_views
 
 
-def generate_html(density_data: dict, default_sigma: float = 1.0, default_power: float = 2.0) -> str:
+def generate_html(density_data: dict, default_sigma: float = 0.0, default_power: float = 2.0) -> str:
     """Generate the complete static HTML globe viewer with embedded data."""
 
     # Compress and encode the density data
@@ -1362,6 +1533,148 @@ def generate_html(density_data: dict, default_sigma: float = 1.0, default_power:
             return group;
         }
         
+        // Satellite bar chart showing US state counts
+        let satelliteChart = null;
+        let satelliteChartVisible = true;
+        
+        function createSatelliteBarChart() {
+            if (!densityData.state_counts || densityData.state_counts.length === 0) {
+                console.log('No state counts available for satellite chart');
+                return null;
+            }
+            
+            const group = new THREE.Group();
+            const states = densityData.state_counts.slice(0, 20); // Top 20 states
+            
+            if (states.length === 0) return null;
+            
+            // Position the chart "in orbit" - offset from Earth to not obstruct view
+            // Place it in the upper-right quadrant when viewing USA
+            const chartCenterX = GLOBE_RADIUS * 2.8;  // To the right of globe
+            const chartCenterY = GLOBE_RADIUS * 1.5;  // Above center
+            const chartCenterZ = -GLOBE_RADIUS * 0.5; // Slightly behind
+            
+            // Chart dimensions
+            const chartWidth = 4;
+            const chartHeight = 3;
+            const barWidth = chartWidth / states.length * 0.8;
+            const barSpacing = chartWidth / states.length;
+            const maxCount = Math.max(...states.map(s => s.count));
+            
+            // Create a backing plate for the chart
+            const plateGeo = new THREE.PlaneGeometry(chartWidth + 0.5, chartHeight + 1);
+            const plateMat = new THREE.MeshBasicMaterial({
+                color: 0x0a1020,
+                transparent: true,
+                opacity: 0.85,
+                side: THREE.DoubleSide
+            });
+            const plate = new THREE.Mesh(plateGeo, plateMat);
+            plate.position.set(chartCenterX, chartCenterY + 0.3, chartCenterZ - 0.1);
+            group.add(plate);
+            
+            // Add title
+            const titleCanvas = document.createElement('canvas');
+            titleCanvas.width = 512;
+            titleCanvas.height = 64;
+            const titleCtx = titleCanvas.getContext('2d');
+            titleCtx.fillStyle = '#ffffff';
+            titleCtx.font = 'bold 32px Arial';
+            titleCtx.textAlign = 'center';
+            titleCtx.fillText('📊 Top States by Count', 256, 42);
+            
+            const titleTexture = new THREE.CanvasTexture(titleCanvas);
+            const titleMat = new THREE.SpriteMaterial({ map: titleTexture, transparent: true });
+            const titleSprite = new THREE.Sprite(titleMat);
+            titleSprite.position.set(chartCenterX, chartCenterY + chartHeight/2 + 0.4, chartCenterZ);
+            titleSprite.scale.set(2.5, 0.3, 1);
+            group.add(titleSprite);
+            
+            // Create bars with gradient colors
+            const barColors = [
+                0xff6b6b, 0xff8e72, 0xffa94d, 0xffc078, 0xffd43b,
+                0xd4e157, 0x9ccc65, 0x66bb6a, 0x4db6ac, 0x4dd0e1,
+                0x4fc3f7, 0x64b5f6, 0x7986cb, 0x9575cd, 0xba68c8,
+                0xe57373, 0xf06292, 0xab47bc, 0x7e57c2, 0x5c6bc0
+            ];
+            
+            states.forEach((state, i) => {
+                const normalizedHeight = (state.count / maxCount) * chartHeight * 0.85;
+                const x = chartCenterX - chartWidth/2 + barSpacing * (i + 0.5);
+                const y = chartCenterY - chartHeight/2 + normalizedHeight/2 + 0.1;
+                
+                // Bar geometry
+                const barGeo = new THREE.BoxGeometry(barWidth, normalizedHeight, 0.15);
+                const barMat = new THREE.MeshPhongMaterial({
+                    color: barColors[i % barColors.length],
+                    shininess: 50,
+                    transparent: true,
+                    opacity: 0.9
+                });
+                const bar = new THREE.Mesh(barGeo, barMat);
+                bar.position.set(x, y, chartCenterZ);
+                group.add(bar);
+                
+                // State label (below bar)
+                const labelCanvas = document.createElement('canvas');
+                labelCanvas.width = 64;
+                labelCanvas.height = 48;
+                const ctx = labelCanvas.getContext('2d');
+                ctx.fillStyle = '#ffffff';
+                ctx.font = 'bold 24px Arial';
+                ctx.textAlign = 'center';
+                ctx.fillText(state.abbrev, 32, 28);
+                
+                const labelTexture = new THREE.CanvasTexture(labelCanvas);
+                const labelMat = new THREE.SpriteMaterial({ map: labelTexture, transparent: true });
+                const labelSprite = new THREE.Sprite(labelMat);
+                labelSprite.position.set(x, chartCenterY - chartHeight/2 - 0.15, chartCenterZ);
+                labelSprite.scale.set(0.4, 0.3, 1);
+                group.add(labelSprite);
+                
+                // Count label (on top of bar) - only for top 10
+                if (i < 10) {
+                    const countCanvas = document.createElement('canvas');
+                    countCanvas.width = 128;
+                    countCanvas.height = 48;
+                    const countCtx = countCanvas.getContext('2d');
+                    countCtx.fillStyle = '#ffffff';
+                    countCtx.font = '20px Arial';
+                    countCtx.textAlign = 'center';
+                    const countStr = state.count >= 1000 ? (state.count/1000).toFixed(1) + 'k' : state.count.toString();
+                    countCtx.fillText(countStr, 64, 30);
+                    
+                    const countTexture = new THREE.CanvasTexture(countCanvas);
+                    const countMat = new THREE.SpriteMaterial({ map: countTexture, transparent: true });
+                    const countSprite = new THREE.Sprite(countMat);
+                    countSprite.position.set(x, y + normalizedHeight/2 + 0.2, chartCenterZ);
+                    countSprite.scale.set(0.5, 0.2, 1);
+                    group.add(countSprite);
+                }
+            });
+            
+            // Add grid lines
+            const gridMat = new THREE.LineBasicMaterial({ color: 0x334455, transparent: true, opacity: 0.5 });
+            for (let i = 0; i <= 4; i++) {
+                const y = chartCenterY - chartHeight/2 + (chartHeight * 0.85 * i / 4) + 0.1;
+                const points = [
+                    new THREE.Vector3(chartCenterX - chartWidth/2 - 0.1, y, chartCenterZ - 0.05),
+                    new THREE.Vector3(chartCenterX + chartWidth/2 + 0.1, y, chartCenterZ - 0.05)
+                ];
+                const lineGeo = new THREE.BufferGeometry().setFromPoints(points);
+                group.add(new THREE.Line(lineGeo, gridMat));
+            }
+            
+            return group;
+        }
+        
+        function toggleSatelliteChart() {
+            if (satelliteChart) {
+                satelliteChartVisible = !satelliteChartVisible;
+                satelliteChart.visible = satelliteChartVisible;
+            }
+        }
+        
         function updateVisualization() {
             const resKey = settings.resolution.toString();
             if (!densityData.histograms[resKey]) {
@@ -2323,11 +2636,19 @@ def generate_html(density_data: dict, default_sigma: float = 1.0, default_power:
                     totalPoints: densityData.total_points,
                     boundaries: densityData.boundaries?.length || 0,
                     peaks: densityData.peaks?.length || 0,
-                    localViews: Object.keys(densityData.local_views || {}).length
+                    localViews: Object.keys(densityData.local_views || {}).length,
+                    stateCounts: densityData.state_counts?.length || 0
                 });
                 
                 boundaryLines = createBoundaryLines();
                 if (boundaryLines) scene.add(boundaryLines);
+                
+                // Create satellite bar chart for US state counts
+                satelliteChart = createSatelliteBarChart();
+                if (satelliteChart) {
+                    scene.add(satelliteChart);
+                    console.log('Added satellite bar chart for state counts');
+                }
                 
                 setupControls();
                 updateVisualization();
@@ -2365,7 +2686,7 @@ def main():
     parser = argparse.ArgumentParser(description='Generate static HTML globe density viewer')
     parser.add_argument('-i', '--input', default='output/raw.tsv.gz',
                         help='Input TSV file')
-    parser.add_argument('-o', '--output', default='output/viewer/globe_viewer.html',
+    parser.add_argument('-o', '--output', default='docs/index.html',
                         help='Output HTML file')
     parser.add_argument('--resolutions', type=int, nargs='+', default=DEFAULT_RESOLUTIONS,
                         help=f'Resolutions to compute (default: {DEFAULT_RESOLUTIONS}). '
@@ -2399,6 +2720,7 @@ def main():
         'boundaries': [],
         'peaks': [],
         'local_views': {},
+        'state_counts': [],
         'total_points': 0
     }
 
@@ -2452,6 +2774,19 @@ def main():
 
     density_data['boundaries'] = boundaries
     print(f"   Total: {len(boundaries)} boundary polygons")
+
+    # Compute state counts for satellite bar chart
+    print(f"\n📊 Computing US state counts for satellite chart...")
+    try:
+        state_counts = compute_state_counts(args.input, args.shapefile, args.chunk_size)
+        density_data['state_counts'] = state_counts
+        if state_counts:
+            top_3 = state_counts[:3]
+            for sc in top_3:
+                print(f"   {sc['abbrev']}: {sc['count']:,}")
+    except Exception as e:
+        print(f"   ⚠ Could not compute state counts: {e}")
+        density_data['state_counts'] = []
 
     # Generate HTML
     print(f"\n📄 Generating static HTML globe viewer...")
