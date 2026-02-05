@@ -2,10 +2,11 @@
 
 > ⚠️ **VIBE CODED** ⚠️
 > 
-> This entire project was vibe coded with AI assistance. It works, it's pretty, but don't expect pristine engineering. The code is a product of iterative "make it work, make it cool" sessions. PRs welcome if you want to clean things up, but honestly it's probably fine. Ship it. 🚀
+> Ship it. 🚀
 
 Generate stunning, self-contained 3D globe visualizations from GPS tracking data. The output is a single HTML file that runs entirely in the browser - no server required. Perfect for sharing, GitHub Pages, or serving from simple hardware like a Raspberry Pi.
 
+![Globe Viewer Screenshot](ex.globe.png)
 
 ## Features
 

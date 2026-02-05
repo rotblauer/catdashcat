@@ -843,7 +843,7 @@ def generate_html(density_data: dict, default_sigma: float = 1.0, default_power:
                 <label>Smoothing (σ)</label>
                 <input type="range" id="sigma" min="0" max="0.5" step="0.01" value="''' + str(default_sigma) + '''">
                 <div class="value" id="sigma-value">''' + str(default_sigma) + '''</div>
-                <div class="hint">0 = raw, higher = smoother</div>
+                <div class="hint">0 = sharp peaks, 0.5 = very smooth</div>
             </div>
             
             <div class="control-group">
@@ -1056,16 +1056,20 @@ def generate_html(density_data: dict, default_sigma: float = 1.0, default_power:
         }
         
         function gaussianBlur(data, width, height, sigma) {
-            if (sigma < 0.1) return data.slice();
+            // Sigma is a fraction of the image width (0-0.5 range means 0-50% of width)
+            // Scale sigma to actual pixels based on width
+            const pixelSigma = sigma * width;
             
-            const kernelSize = Math.ceil(sigma * 3) * 2 + 1;
+            if (pixelSigma < 0.5) return data.slice();  // Skip if less than half a pixel
+            
+            const kernelSize = Math.ceil(pixelSigma * 3) * 2 + 1;
             const kernel = [];
             const half = Math.floor(kernelSize / 2);
             let sum = 0;
             
             for (let i = 0; i < kernelSize; i++) {
                 const x = i - half;
-                const g = Math.exp(-(x * x) / (2 * sigma * sigma));
+                const g = Math.exp(-(x * x) / (2 * pixelSigma * pixelSigma));
                 kernel.push(g);
                 sum += g;
             }
@@ -2118,7 +2122,7 @@ def generate_html(density_data: dict, default_sigma: float = 1.0, default_power:
             if (localSettings.showMapOverlay && currentLocalData) {
                 // Create a canvas to render map tiles
                 const mapCanvas = document.createElement('canvas');
-                const canvasSize = 512;
+                const canvasSize = 1024;  // Higher resolution canvas
                 mapCanvas.width = canvasSize;
                 mapCanvas.height = canvasSize;
                 const ctx = mapCanvas.getContext('2d');
@@ -2135,7 +2139,8 @@ def generate_html(density_data: dict, default_sigma: float = 1.0, default_power:
                 const lonSpan = b.lon_max - b.lon_min;
                 const maxSpan = Math.max(latSpan, lonSpan);
                 // Zoom level where 1 tile ≈ 360/2^zoom degrees
-                const zoom = Math.max(8, Math.min(12, Math.floor(Math.log2(360 / maxSpan)) - 1));
+                // Higher zoom = more detail. For ~100km regions, zoom 11-14 is good
+                const zoom = Math.max(10, Math.min(16, Math.floor(Math.log2(360 / maxSpan))));
                 
                 // Calculate tile bounds
                 const n = Math.pow(2, zoom);
