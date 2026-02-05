@@ -658,6 +658,164 @@ def generate_html(density_data: dict, default_sigma: float = 1.0, default_power:
         }
         
         .leaflet-container { background: #1a1a2e; }
+        
+        /* Google Earth-style Navigation Widget */
+        #nav-widget {
+            position: absolute;
+            bottom: 100px;
+            right: 25px;
+            z-index: 100;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            gap: 8px;
+        }
+        
+        .nav-compass {
+            width: 90px;
+            height: 90px;
+            position: relative;
+        }
+        
+        .nav-ring {
+            width: 90px;
+            height: 90px;
+            border: 2px solid rgba(255, 255, 255, 0.3);
+            border-radius: 50%;
+            position: absolute;
+            background: rgba(20, 20, 40, 0.7);
+            box-shadow: 0 4px 20px rgba(0, 0, 0, 0.4);
+        }
+        
+        .nav-n {
+            position: absolute;
+            top: -8px;
+            left: 50%;
+            transform: translateX(-50%);
+            font-size: 10px;
+            font-weight: bold;
+            color: #e94560;
+        }
+        
+        .nav-btn {
+            position: absolute;
+            width: 28px;
+            height: 28px;
+            background: rgba(40, 40, 60, 0.9);
+            border: 1px solid rgba(255, 255, 255, 0.2);
+            border-radius: 50%;
+            color: #fff;
+            font-size: 14px;
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            transition: all 0.15s;
+        }
+        
+        .nav-btn:hover {
+            background: rgba(233, 69, 96, 0.6);
+            border-color: #e94560;
+        }
+        
+        .nav-btn:active {
+            transform: scale(0.95);
+            background: rgba(233, 69, 96, 0.8);
+        }
+        
+        .nav-up { top: 4px; left: 50%; transform: translateX(-50%); }
+        .nav-down { bottom: 4px; left: 50%; transform: translateX(-50%); }
+        .nav-left { left: 4px; top: 50%; transform: translateY(-50%); }
+        .nav-right { right: 4px; top: 50%; transform: translateY(-50%); }
+        
+        .nav-center {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            width: 24px;
+            height: 24px;
+            background: rgba(60, 60, 80, 0.9);
+            border: 1px solid rgba(255, 255, 255, 0.3);
+            border-radius: 50%;
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 10px;
+        }
+        
+        .nav-center:hover { background: rgba(233, 69, 96, 0.6); }
+        
+        .nav-zoom {
+            display: flex;
+            flex-direction: column;
+            background: rgba(20, 20, 40, 0.8);
+            border-radius: 20px;
+            overflow: hidden;
+            border: 1px solid rgba(255, 255, 255, 0.2);
+            box-shadow: 0 4px 20px rgba(0, 0, 0, 0.4);
+        }
+        
+        .zoom-btn {
+            width: 36px;
+            height: 36px;
+            background: transparent;
+            border: none;
+            color: #fff;
+            font-size: 18px;
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            transition: all 0.15s;
+        }
+        
+        .zoom-btn:hover { background: rgba(233, 69, 96, 0.4); }
+        .zoom-btn:active { background: rgba(233, 69, 96, 0.7); }
+        
+        .zoom-divider {
+            width: 24px;
+            height: 1px;
+            background: rgba(255, 255, 255, 0.2);
+            margin: 0 auto;
+        }
+        
+        .nav-tilt {
+            display: flex;
+            flex-direction: column;
+            background: rgba(20, 20, 40, 0.8);
+            border-radius: 15px;
+            overflow: hidden;
+            border: 1px solid rgba(255, 255, 255, 0.2);
+            box-shadow: 0 4px 20px rgba(0, 0, 0, 0.4);
+        }
+        
+        .tilt-btn {
+            width: 30px;
+            height: 26px;
+            background: transparent;
+            border: none;
+            color: #fff;
+            font-size: 10px;
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            transition: all 0.15s;
+        }
+        
+        .tilt-btn:hover { background: rgba(233, 69, 96, 0.4); }
+        .tilt-btn:active { background: rgba(233, 69, 96, 0.7); }
+        
+        .nav-label {
+            font-size: 8px;
+            color: #888;
+            text-align: center;
+            margin-top: 2px;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
     </style>
     
     <!-- Leaflet CSS for map -->
@@ -753,6 +911,29 @@ def generate_html(density_data: dict, default_sigma: float = 1.0, default_power:
         <div id="colorbar-labels" class="hidden">
             <span>High</span>
             <span>Low</span>
+        </div>
+        
+        <!-- Google Earth-style Navigation Widget -->
+        <div id="nav-widget" class="hidden">
+            <div class="nav-compass">
+                <div class="nav-ring"></div>
+                <span class="nav-n">N</span>
+                <button class="nav-btn nav-up" id="nav-up" title="Rotate Up">▲</button>
+                <button class="nav-btn nav-down" id="nav-down" title="Rotate Down">▼</button>
+                <button class="nav-btn nav-left" id="nav-left" title="Rotate Left">◀</button>
+                <button class="nav-btn nav-right" id="nav-right" title="Rotate Right">▶</button>
+                <button class="nav-center" id="nav-reset" title="Reset View">⟲</button>
+            </div>
+            <div class="nav-zoom">
+                <button class="zoom-btn" id="zoom-in" title="Zoom In">+</button>
+                <div class="zoom-divider"></div>
+                <button class="zoom-btn" id="zoom-out" title="Zoom Out">−</button>
+            </div>
+            <div class="nav-tilt">
+                <button class="tilt-btn" id="tilt-up" title="Tilt Up">↑</button>
+                <button class="tilt-btn" id="tilt-down" title="Tilt Down">↓</button>
+            </div>
+            <div class="nav-label">Tilt</div>
         </div>
     </div>
     
@@ -1318,7 +1499,7 @@ def generate_html(density_data: dict, default_sigma: float = 1.0, default_power:
             
             controls = new THREE.OrbitControls(camera, renderer.domElement);
             controls.enableDamping = true;
-            controls.dampingFactor = 0.05;
+            controls.dampingFactor = 0.08;       // Smoother damping
             controls.minDistance = GLOBE_RADIUS * 1.2;  // Allow closer zoom
             controls.maxDistance = GLOBE_RADIUS * 15;   // Allow further zoom out
             controls.autoRotate = settings.autoRotate;  // Use default from settings
@@ -1327,8 +1508,12 @@ def generate_html(density_data: dict, default_sigma: float = 1.0, default_power:
             controls.minPolarAngle = 0;           // Can look from top
             controls.maxPolarAngle = Math.PI;     // Can look from bottom
             controls.enablePan = true;            // Allow panning
-            controls.panSpeed = 0.5;
-            controls.rotateSpeed = 0.8;
+            controls.panSpeed = 0.8;
+            controls.rotateSpeed = 0.6;
+            controls.zoomSpeed = 0.8;             // Smoother zoom
+            controls.enableZoom = true;
+            // Smooth zoom interpolation
+            controls.zoomToCursor = false;
             
             // Lighting
             scene.add(new THREE.AmbientLight(0xffffff, 0.3));
@@ -1450,6 +1635,116 @@ def generate_html(density_data: dict, default_sigma: float = 1.0, default_power:
             
             // Setup peaks panel
             setupPeaksPanel();
+            
+            // Setup navigation widget
+            setupNavWidget();
+        }
+        
+        // ============================================
+        // NAVIGATION WIDGET
+        // ============================================
+        
+        function setupNavWidget() {
+            document.getElementById('nav-widget').classList.remove('hidden');
+            
+            // Smooth animated camera movement
+            let isAnimating = false;
+            
+            function smoothCameraMove(deltaAzimuth, deltaPolar, deltaZoom, duration = 300) {
+                if (isAnimating) return;
+                
+                const startAzimuth = controls.getAzimuthalAngle();
+                const startPolar = controls.getPolarAngle();
+                const startDistance = camera.position.length();
+                
+                const targetAzimuth = startAzimuth + deltaAzimuth;
+                const targetPolar = Math.max(0.1, Math.min(Math.PI - 0.1, startPolar + deltaPolar));
+                const targetDistance = Math.max(controls.minDistance, Math.min(controls.maxDistance, startDistance * (1 + deltaZoom)));
+                
+                isAnimating = true;
+                const startTime = Date.now();
+                
+                function animate() {
+                    const elapsed = Date.now() - startTime;
+                    const t = Math.min(1, elapsed / duration);
+                    // Ease out cubic for smooth deceleration
+                    const eased = 1 - Math.pow(1 - t, 3);
+                    
+                    const currentAzimuth = startAzimuth + (targetAzimuth - startAzimuth) * eased;
+                    const currentPolar = startPolar + (targetPolar - startPolar) * eased;
+                    const currentDistance = startDistance + (targetDistance - startDistance) * eased;
+                    
+                    // Convert spherical to cartesian
+                    camera.position.x = currentDistance * Math.sin(currentPolar) * Math.cos(currentAzimuth);
+                    camera.position.y = currentDistance * Math.cos(currentPolar);
+                    camera.position.z = currentDistance * Math.sin(currentPolar) * Math.sin(currentAzimuth);
+                    
+                    camera.lookAt(controls.target);
+                    
+                    if (t < 1) {
+                        requestAnimationFrame(animate);
+                    } else {
+                        isAnimating = false;
+                    }
+                }
+                animate();
+            }
+            
+            // Rotation buttons
+            const rotateStep = Math.PI / 12; // 15 degrees
+            
+            document.getElementById('nav-left').addEventListener('click', () => {
+                smoothCameraMove(-rotateStep, 0, 0);
+            });
+            
+            document.getElementById('nav-right').addEventListener('click', () => {
+                smoothCameraMove(rotateStep, 0, 0);
+            });
+            
+            document.getElementById('nav-up').addEventListener('click', () => {
+                smoothCameraMove(0, -rotateStep, 0);
+            });
+            
+            document.getElementById('nav-down').addEventListener('click', () => {
+                smoothCameraMove(0, rotateStep, 0);
+            });
+            
+            // Reset view
+            document.getElementById('nav-reset').addEventListener('click', resetView);
+            
+            // Zoom buttons with smooth animation
+            document.getElementById('zoom-in').addEventListener('click', () => {
+                smoothCameraMove(0, 0, -0.2, 250);
+            });
+            
+            document.getElementById('zoom-out').addEventListener('click', () => {
+                smoothCameraMove(0, 0, 0.25, 250);
+            });
+            
+            // Tilt buttons (polar angle)
+            const tiltStep = Math.PI / 18; // 10 degrees
+            
+            document.getElementById('tilt-up').addEventListener('click', () => {
+                smoothCameraMove(0, -tiltStep, 0, 200);
+            });
+            
+            document.getElementById('tilt-down').addEventListener('click', () => {
+                smoothCameraMove(0, tiltStep, 0, 200);
+            });
+            
+            // Hold-to-repeat for navigation buttons
+            const repeatButtons = ['nav-up', 'nav-down', 'nav-left', 'nav-right', 'zoom-in', 'zoom-out', 'tilt-up', 'tilt-down'];
+            repeatButtons.forEach(btnId => {
+                const btn = document.getElementById(btnId);
+                let intervalId = null;
+                
+                btn.addEventListener('mousedown', () => {
+                    intervalId = setInterval(() => btn.click(), 150);
+                });
+                
+                btn.addEventListener('mouseup', () => clearInterval(intervalId));
+                btn.addEventListener('mouseleave', () => clearInterval(intervalId));
+            });
         }
         
         // ============================================
