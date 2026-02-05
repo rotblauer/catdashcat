@@ -8,7 +8,7 @@ Example usage:
     python generate_globe_viewer.py -i output/raw.tsv.gz -o output/viewer/globe_viewer.html
     python generate_globe_viewer.py --resolutions 100 250 500 --sigma 1.2 --power 2.5
     .venv/bin/python generate_globe_viewer.py --resolutions 180 360 720
-    .venv/bin/python generate_globe_viewer.py --resolutions 720 1440 2880 --sigma 0.05
+    .venv/bin/python generate_globe_viewer.py --resolutions 720 1440 2880 --sigma 0.01  --n-peaks 10 --local-resolution 300 --workers 5
 
 """
 
@@ -683,9 +683,9 @@ def generate_html(density_data: dict, default_sigma: float = 1.0, default_power:
             
             <div class="control-group">
                 <label>Smoothing (σ)</label>
-                <input type="range" id="sigma" min="0.1" max="4" step="0.1" value="''' + str(default_sigma) + '''">
+                <input type="range" id="sigma" min="0" max="0.5" step="0.01" value="''' + str(default_sigma) + '''">
                 <div class="value" id="sigma-value">''' + str(default_sigma) + '''</div>
-                <div class="hint">Lower = sharper peaks</div>
+                <div class="hint">0 = raw, higher = smoother</div>
             </div>
             
             <div class="control-group">
@@ -722,6 +722,15 @@ def generate_html(density_data: dict, default_sigma: float = 1.0, default_power:
                 <select id="auto-rotate">
                     <option value="false" selected>Off</option>
                     <option value="true">On</option>
+                </select>
+            </div>
+            
+            <div class="control-group">
+                <label>Base Map</label>
+                <select id="base-map">
+                    <option value="dark" selected>Dark</option>
+                    <option value="natural">Natural Earth</option>
+                    <option value="topo">Topography</option>
                 </select>
             </div>
             
@@ -785,6 +794,14 @@ def generate_html(density_data: dict, default_sigma: float = 1.0, default_power:
                 <input type="range" id="local-threshold" min="0" max="0.1" step="0.002" value="0.01">
                 <div class="value" id="local-threshold-value">0.010</div>
             </div>
+            
+            <div class="control-group">
+                <label>Show Map Overlay</label>
+                <select id="local-map-overlay">
+                    <option value="false" selected>Off</option>
+                    <option value="true">On (OpenStreetMap)</option>
+                </select>
+            </div>
         </div>
     </div>
 
@@ -812,7 +829,8 @@ def generate_html(density_data: dict, default_sigma: float = 1.0, default_power:
             heightScale: 0.25,  // Taller peaks by default
             threshold: 0.02,    // Minimum density to show
             showBoundaries: true,
-            autoRotate: false
+            autoRotate: false,
+            baseMap: 'dark'     // 'dark', 'natural', 'topo'
         };
         
         // Color gradient for density - vibrant peaks on dark background
@@ -938,14 +956,56 @@ def generate_html(density_data: dict, default_sigma: float = 1.0, default_power:
             return { data: result, width, height };
         }
         
-        function createGlobe() {
-            // Earth base sphere (dark ocean)
+        // Base map texture URLs (free tile services)
+        const BASE_MAP_TEXTURES = {
+            dark: null, // Solid color
+            natural: 'https://unpkg.com/three-globe/example/img/earth-blue-marble.jpg',
+            topo: 'https://unpkg.com/three-globe/example/img/earth-topology.png'
+        };
+        
+        function createGlobe(baseMapType = 'dark') {
             const geometry = new THREE.SphereGeometry(GLOBE_RADIUS, 64, 64);
-            const material = new THREE.MeshPhongMaterial({
-                color: 0x0a0a1a,
-                shininess: 5
-            });
-            return new THREE.Mesh(geometry, material);
+            
+            if (baseMapType === 'dark' || !BASE_MAP_TEXTURES[baseMapType]) {
+                // Dark ocean (default)
+                const material = new THREE.MeshPhongMaterial({
+                    color: 0x0a0a1a,
+                    shininess: 5
+                });
+                return new THREE.Mesh(geometry, material);
+            } else {
+                // Load texture
+                const textureLoader = new THREE.TextureLoader();
+                const material = new THREE.MeshPhongMaterial({
+                    color: 0xffffff,
+                    shininess: 5,
+                    transparent: true,
+                    opacity: 0.7
+                });
+                
+                textureLoader.load(
+                    BASE_MAP_TEXTURES[baseMapType],
+                    (texture) => {
+                        material.map = texture;
+                        material.needsUpdate = true;
+                    },
+                    undefined,
+                    (err) => console.warn('Could not load base map texture:', err)
+                );
+                
+                return new THREE.Mesh(geometry, material);
+            }
+        }
+        
+        function updateGlobeBaseMap(baseMapType) {
+            if (globeMesh) {
+                scene.remove(globeMesh);
+                if (globeMesh.material.map) globeMesh.material.map.dispose();
+                globeMesh.material.dispose();
+                globeMesh.geometry.dispose();
+            }
+            globeMesh = createGlobe(baseMapType);
+            scene.add(globeMesh);
         }
         
         function createAtmosphere() {
@@ -1316,15 +1376,16 @@ def generate_html(density_data: dict, default_sigma: float = 1.0, default_power:
             };
             
             resSelect.innerHTML = '';
-            for (const res of Object.keys(densityData.histograms).sort((a, b) => +a - +b)) {
+            const sortedResolutions = Object.keys(densityData.histograms).sort((a, b) => +a - +b);
+            for (const res of sortedResolutions) {
                 const opt = document.createElement('option');
                 opt.value = res;
                 opt.textContent = resLabels[res] || `${res} bins`;
                 resSelect.appendChild(opt);
             }
             
-            const defaultRes = Object.keys(densityData.histograms).includes('360') ? '360' : 
-                              Object.keys(densityData.histograms)[0];
+            // Default to highest resolution
+            const defaultRes = sortedResolutions[sortedResolutions.length - 1];
             settings.resolution = parseInt(defaultRes);
             resSelect.value = defaultRes;
             
@@ -1375,6 +1436,11 @@ def generate_html(density_data: dict, default_sigma: float = 1.0, default_power:
                 controls.autoRotate = settings.autoRotate;
             });
             
+            document.getElementById('base-map').addEventListener('change', (e) => {
+                settings.baseMap = e.target.value;
+                updateGlobeBaseMap(settings.baseMap);
+            });
+            
             document.getElementById('focus-btn').addEventListener('click', focusOnUSA);
             document.getElementById('side-view-btn').addEventListener('click', sideView);
             document.getElementById('reset-view-btn').addEventListener('click', resetView);
@@ -1400,7 +1466,8 @@ def generate_html(density_data: dict, default_sigma: float = 1.0, default_power:
             sigma: 0.05,
             power: 2.0,
             heightScale: 0.5,
-            threshold: 0.01
+            threshold: 0.01,
+            showMapOverlay: false
         };
         
         function setupPeaksPanel() {
@@ -1749,9 +1816,54 @@ def generate_html(density_data: dict, default_sigma: float = 1.0, default_power:
             geometry.setIndex(indices);
             geometry.computeVertexNormals();
             
-            // Add a base plane
+            // Add a base plane (with optional map texture)
             const planeGeo = new THREE.PlaneGeometry(scaleX * 1.05, scaleY * 1.05);
-            const planeMat = new THREE.MeshBasicMaterial({ color: 0x2a3a5a, side: THREE.DoubleSide });
+            let planeMat;
+            
+            if (localSettings.showMapOverlay && currentLocalData) {
+                // Create a canvas to render map tiles
+                const mapCanvas = document.createElement('canvas');
+                mapCanvas.width = 512;
+                mapCanvas.height = 512;
+                const ctx = mapCanvas.getContext('2d');
+                
+                // Fill with base color first
+                ctx.fillStyle = '#2a3a5a';
+                ctx.fillRect(0, 0, 512, 512);
+                
+                // Load OSM tiles for the region
+                const b = currentLocalData.bounds;
+                const centerLat = (b.lat_min + b.lat_max) / 2;
+                const centerLon = (b.lon_min + b.lon_max) / 2;
+                const zoom = 10; // Appropriate zoom for ~100km region
+                
+                // Calculate tile coordinates
+                const tileX = Math.floor((centerLon + 180) / 360 * Math.pow(2, zoom));
+                const tileY = Math.floor((1 - Math.log(Math.tan(centerLat * Math.PI / 180) + 1 / Math.cos(centerLat * Math.PI / 180)) / Math.PI) / 2 * Math.pow(2, zoom));
+                
+                // Create texture from canvas (will be updated when tile loads)
+                const texture = new THREE.CanvasTexture(mapCanvas);
+                texture.needsUpdate = true;
+                
+                // Load the tile
+                const tileImg = new Image();
+                tileImg.crossOrigin = 'anonymous';
+                tileImg.onload = () => {
+                    ctx.drawImage(tileImg, 0, 0, 512, 512);
+                    texture.needsUpdate = true;
+                };
+                tileImg.src = `https://tile.openstreetmap.org/${zoom}/${tileX}/${tileY}.png`;
+                
+                planeMat = new THREE.MeshBasicMaterial({ 
+                    map: texture,
+                    side: THREE.DoubleSide,
+                    transparent: true,
+                    opacity: 0.8
+                });
+            } else {
+                planeMat = new THREE.MeshBasicMaterial({ color: 0x2a3a5a, side: THREE.DoubleSide });
+            }
+            
             const plane = new THREE.Mesh(planeGeo, planeMat);
             plane.position.z = -0.01;
             
@@ -1813,6 +1925,12 @@ def generate_html(density_data: dict, default_sigma: float = 1.0, default_power:
                 thresholdValue.textContent = localSettings.threshold.toFixed(3);
             };
             thresholdSlider.onchange = () => updateLocalVisualization();
+            
+            // Map overlay toggle
+            document.getElementById('local-map-overlay').addEventListener('change', (e) => {
+                localSettings.showMapOverlay = e.target.value === 'true';
+                updateLocalVisualization();
+            });
             
             // Close button
             document.getElementById('close-local-btn').onclick = closeLocalView;
