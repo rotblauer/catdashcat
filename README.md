@@ -2,11 +2,9 @@
 
 > ⚠️ **VIBE CODED** ⚠️
 > 
-> Ship it. 🚀
+> This entire project was vibe coded with AI assistance. It works, it's pretty, but don't expect pristine engineering. The code is a product of iterative "make it work, make it cool" sessions. PRs welcome if you want to clean things up, but honestly it's probably fine. Ship it. 🚀
 
 Generate stunning, self-contained 3D globe visualizations from GPS tracking data. The output is a single HTML file that runs entirely in the browser - no server required. Perfect for sharing, GitHub Pages, or serving from simple hardware like a Raspberry Pi.
-
-![Globe Viewer Screenshot](ex.globe.png)
 
 ## Features
 
@@ -15,7 +13,6 @@ Generate stunning, self-contained 3D globe visualizations from GPS tracking data
 - 🗺️ **Natural Earth base maps** - Beautiful satellite-style backgrounds
 - 🏔️ **Top 10 Peak Locations** - Click to zoom into 100km local views
 - 🗾 **OpenStreetMap overlays** - Geographic context in local views
-- 📊 **Satellite Bar Chart** - Floating 3D chart showing US state counts
 - 📁 **Self-contained HTML** - Single ~5MB file, works offline
 - ⚡ **WebGL accelerated** - Smooth 60fps with millions of points
 - 🔧 **Real-time controls** - Adjust smoothing, peak height, threshold
@@ -32,12 +29,14 @@ pip install -r requirements.txt
 # 3. Generate interactive globe viewer
 .venv/bin/python generate_globe_viewer.py \
     -i output/raw.tsv.gz \
+    -o output/viewer/globe_viewer.html \
     --resolutions 720 1440 \
+    --sigma 0.05 \
     --n-peaks 10 \
     --workers 4
 
-# 4. Open in browser (default output: docs/index.html)
-open docs/index.html
+# 4. Open in browser
+open output/viewer/globe_viewer.html
 ```
 
 ## Command Line Options
@@ -47,10 +46,10 @@ open docs/index.html
 
 Options:
   -i, --input           Input TSV file (default: output/raw.tsv.gz)
-  -o, --output          Output HTML file (default: docs/index.html)
+  -o, --output          Output HTML file (default: output/viewer/globe_viewer.html)
   --resolutions         Resolution levels to compute (default: 180 360 720 1440 2880)
                         Higher = more detail. 360 = 1° bins, 1440 = 0.25° bins
-  --sigma               Default smoothing (0-0.5, default: 0)
+  --sigma               Default smoothing (0-0.5, default: 0.1)
                         Lower = sharper peaks, 0 = raw data
   --power               Peak height exponent (default: 2.0)
                         Higher = more dramatic peaks
@@ -94,7 +93,6 @@ Options:
 - **Threshold** - Minimum density to display
 - **Base Map** - Dark / Natural Earth / Topography
 - **Auto Rotate** - Continuous slow rotation
-- **Toggle State Chart** - Show/hide floating US state counts bar chart
 
 ### Local Peak Views
 Click any peak in the sidebar to zoom into a 100km×100km region:
@@ -132,10 +130,8 @@ Input JSON format (newline-delimited GeoJSON features):
 ### 2. Generate Viewer
 
 ```bash
-.venv/bin/python generate_globe_viewer.py -i output/raw.tsv.gz
+.venv/bin/python generate_globe_viewer.py -i output/raw.tsv.gz -o output/viewer/globe_viewer.html
 ```
-
-Output: `docs/index.html` (self-contained, ready for GitHub Pages)
 
 ### 3. Deploy
 

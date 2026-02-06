@@ -58,8 +58,6 @@ func parseStreamPerProperty(reader io.Reader, writer io.Writer, n int, property 
 
 	m := make(map[string]int)
 	pCount := 0
-	totalCount := 0
-	start := time.Now()
 	for {
 		var t T
 		if err := dec.Decode(&t); err == io.EOF {
@@ -67,7 +65,6 @@ func parseStreamPerProperty(reader io.Reader, writer io.Writer, n int, property 
 		} else if err != nil {
 			panic(err)
 		}
-		totalCount++
 		//	switch on the property to select on
 		switch property {
 		case "Name":
@@ -78,21 +75,15 @@ func parseStreamPerProperty(reader io.Reader, writer io.Writer, n int, property 
 				if m[t.Properties.Name]%n == 0 {
 					enc.Encode(t)
 					pCount++
+					if pCount%100000 == 0 { // Print less frequently
+						printMap(m, os.Stderr)
+					}
 				}
 			}
 		default:
 			panic("invalid property")
 		}
-		// Progress reporting
-		if totalCount%100000 == 0 {
-			elapsed := time.Since(start).Seconds()
-			rate := float64(totalCount) / elapsed
-			fmt.Fprintf(os.Stderr, "\r[parse] %dk processed, %dk output, %.0f/sec",
-				totalCount/1000, pCount/1000, rate)
-		}
 	}
-	elapsed := time.Since(start).Seconds()
-	fmt.Fprintf(os.Stderr, "\n[parse] Done: %d processed, %d output in %.1fs\n", totalCount, pCount, elapsed)
 	printMap(m, os.Stderr)
 }
 
@@ -161,8 +152,6 @@ func filterStream(reader io.Reader, writer io.Writer, matchAll []string, matchAn
 	defer bwriter.Flush()
 
 	count := 0
-	passed := 0
-	start := time.Now()
 readLoop:
 	for {
 		read, err := breader.ReadBytes('\n')
@@ -172,24 +161,16 @@ readLoop:
 			}
 			log.Fatalln(err)
 		}
-		count++
 		if err := filter(read, matchAll, matchAny, matchNone); err != nil {
 			continue readLoop
 		}
 		bwriter.Write(read)
-		passed++
-		// Progress and flush periodically
-		if count%100000 == 0 {
-			elapsed := time.Since(start).Seconds()
-			rate := float64(count) / elapsed
-			fmt.Fprintf(os.Stderr, "\r[filter] %dk processed, %dk passed (%.1f%%), %.0f/sec",
-				count/1000, passed/1000, 100*float64(passed)/float64(count), rate)
+		count++
+		// Flush periodically instead of every line
+		if count%10000 == 0 {
 			bwriter.Flush()
 		}
 	}
-	elapsed := time.Since(start).Seconds()
-	fmt.Fprintf(os.Stderr, "\n[filter] Done: %d processed, %d passed (%.1f%%) in %.1fs\n",
-		count, passed, 100*float64(passed)/float64(count), elapsed)
 }
 
 // filter filters some read line on the matchAll, matchAny, and matchNone queries.

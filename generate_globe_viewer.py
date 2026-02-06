@@ -8,7 +8,10 @@ Example usage:
     python generate_globe_viewer.py -i output/raw.tsv.gz -o output/viewer/globe_viewer.html
     python generate_globe_viewer.py --resolutions 100 250 500 --sigma 1.2 --power 2.5
     .venv/bin/python generate_globe_viewer.py --resolutions 180 360 720
-    .venv/bin/python generate_globe_viewer.py --resolutions 2880 11520 --sigma 0.01  --n-peaks 10 --local-resolution 1200 --workers 10
+    .venv/bin/python generate_globe_viewer.py --resolutions 2880 --sigma 0.01 --n-peaks 10 --local-resolution 600 --workers 10
+
+    # Quick mode for fast testing (10% sample)
+    .venv/bin/python generate_globe_viewer.py --quick --resolutions 180 360
 
 """
 
@@ -28,10 +31,15 @@ WORLD_LON_MIN, WORLD_LON_MAX = -180.0, 180.0
 
 DEFAULT_RESOLUTIONS = [180, 360, 720, 1440, 2880]  # Up to 0.0625° resolution for fine detail
 DEFAULT_CHUNK_SIZE = 500_000
+QUICK_SAMPLE_RATE = 0.1  # 10% sample for quick mode
 
 
-def build_histograms_multi_resolution(input_file: str, resolutions: list, chunk_size: int) -> tuple:
-    """Build 2D histograms at multiple resolutions in a single pass (global extent)."""
+def build_histograms_multi_resolution(input_file: str, resolutions: list, chunk_size: int, sample_rate: float = 1.0) -> tuple:
+    """Build 2D histograms at multiple resolutions in a single pass (global extent).
+
+    Args:
+        sample_rate: Float 0-1, fraction of rows to use (1.0 = all, 0.1 = 10%)
+    """
     import time
     start_time = time.time()
 
@@ -50,7 +58,8 @@ def build_histograms_multi_resolution(input_file: str, resolutions: list, chunk_
     total_rows = 0
     chunks_processed = 0
 
-    print(f"   Reading data in chunks of {chunk_size:,}...")
+    sample_msg = f" (sampling {sample_rate*100:.0f}%)" if sample_rate < 1.0 else ""
+    print(f"   Reading data in chunks of {chunk_size:,}{sample_msg}...")
     t0 = time.time()
 
     for chunk in pd.read_csv(
@@ -64,6 +73,10 @@ def build_histograms_multi_resolution(input_file: str, resolutions: list, chunk_
     ):
         chunks_processed += 1
         total_rows += len(chunk)
+
+        # Apply sampling if needed
+        if sample_rate < 1.0:
+            chunk = chunk.sample(frac=sample_rate, random_state=42)
 
         chunk['lat'] = pd.to_numeric(chunk['lat'], errors='coerce')
         chunk['lon'] = pd.to_numeric(chunk['lon'], errors='coerce')
@@ -198,6 +211,10 @@ def compute_state_counts(input_file: str, shapefile_path: str, chunk_size: int =
     # Dissolve counties into states
     states_gdf = counties_gdf.dissolve(by='state_fip', as_index=False)
     states_gdf = states_gdf[['state_fip', 'geometry']]
+
+    # Convert to EPSG:4326 to match points (shapefile is typically EPSG:4269)
+    if states_gdf.crs and states_gdf.crs != "EPSG:4326":
+        states_gdf = states_gdf.to_crs("EPSG:4326")
 
     print(f"   ✓ Prepared {len(states_gdf)} state geometries ({time.time()-t0:.1f}s)")
 
@@ -1019,6 +1036,50 @@ def generate_html(density_data: dict, default_sigma: float = 0.0, default_power:
             text-transform: uppercase;
             letter-spacing: 0.5px;
         }
+        
+        /* Panel toggle buttons */
+        .panel-toggle {
+            position: absolute;
+            width: 28px;
+            height: 28px;
+            background: rgba(40, 40, 60, 0.9);
+            border: 1px solid rgba(255, 255, 255, 0.2);
+            border-radius: 6px;
+            color: #fff;
+            font-size: 14px;
+            cursor: pointer;
+            z-index: 150;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            transition: all 0.2s;
+        }
+        .panel-toggle:hover { background: rgba(233, 69, 96, 0.7); }
+        
+        #toggle-controls { top: 20px; left: 290px; }
+        #toggle-peaks { top: 20px; right: 290px; }
+        
+        .panel-collapsed { transform: translateX(-300px); }
+        .panel-collapsed-right { transform: translateX(300px); }
+        
+        /* Moon buttons */
+        .moon-btn {
+            width: 100%;
+            padding: 6px;
+            margin-top: 4px;
+            border: none;
+            border-radius: 6px;
+            color: white;
+            font-size: 11px;
+            cursor: pointer;
+            transition: background 0.2s;
+        }
+        .moon-btn:hover { filter: brightness(1.2); }
+        
+        #toggle-state-moon-btn { background: #e67e22; }
+        #toggle-country-moon-btn { background: #3498db; }
+        #zoom-state-moon-btn { background: #d35400; }
+        #zoom-country-moon-btn { background: #2980b9; }
     </style>
     
     <!-- Leaflet CSS for map -->
@@ -1033,6 +1094,10 @@ def generate_html(density_data: dict, default_sigma: float = 0.0, default_power:
             <p>Loading globe data...</p>
         </div>
         
+        <!-- Toggle buttons for panels -->
+        <button id="toggle-controls" class="panel-toggle hidden" title="Toggle Controls">☰</button>
+        <button id="toggle-peaks" class="panel-toggle hidden" title="Toggle Peaks">📍</button>
+        
         <div id="controls" class="hidden">
             <h1>🌍 Cat GPS Globe</h1>
             <p class="subtitle">Worldwide Distribution</p>
@@ -1044,8 +1109,8 @@ def generate_html(density_data: dict, default_sigma: float = 0.0, default_power:
             
             <div class="control-group">
                 <label>Smoothing (σ)</label>
-                <input type="range" id="sigma" min="0" max="0.5" step="0.01" value="''' + str(default_sigma) + '''">
-                <div class="value" id="sigma-value">''' + str(default_sigma) + '''</div>
+                <input type="range" id="sigma" min="0" max="0.5" step="0.01" value="0">
+                <div class="value" id="sigma-value">0</div>
                 <div class="hint">0 = sharp peaks, 0.5 = very smooth</div>
             </div>
             
@@ -1098,7 +1163,14 @@ def generate_html(density_data: dict, default_sigma: float = 0.0, default_power:
             <button id="focus-btn">🇺🇸 Focus on USA</button>
             <button id="side-view-btn">↔️ Side View</button>
             <button id="reset-view-btn">🔄 Reset View</button>
-            <button id="toggle-chart-btn">📊 Toggle State Chart</button>
+            
+            <hr style="border: none; border-top: 1px solid #333; margin: 12px 0;">
+            <label style="font-size: 10px; color: #888; text-transform: uppercase;">Stat Moons</label>
+            
+            <button id="toggle-state-moon-btn" class="moon-btn">🇺🇸 Hide State Moon</button>
+            <button id="zoom-state-moon-btn" class="moon-btn">🔍 Zoom to State Moon</button>
+            <button id="toggle-country-moon-btn" class="moon-btn">🌍 Hide Country Moon</button>
+            <button id="zoom-country-moon-btn" class="moon-btn">🔍 Zoom to Country Moon</button>
         </div>
         
         <div id="peaks-panel" class="hidden">
@@ -1158,8 +1230,8 @@ def generate_html(density_data: dict, default_sigma: float = 0.0, default_power:
             
             <div class="control-group">
                 <label>Smoothing (σ)</label>
-                <input type="range" id="local-sigma" min="0" max="0.5" step="0.01" value="0.05">
-                <div class="value" id="local-sigma-value">0.05</div>
+                <input type="range" id="local-sigma" min="0" max="0.5" step="0.01" value="0">
+                <div class="value" id="local-sigma-value">0</div>
             </div>
             
             <div class="control-group">
@@ -1209,7 +1281,7 @@ def generate_html(density_data: dict, default_sigma: float = 0.0, default_power:
         
         const settings = {
             resolution: 360,
-            sigma: ''' + str(default_sigma) + ''',
+            sigma: 0,  // Default to 0 for sharp peaks
             power: ''' + str(default_power) + ''',
             heightScale: 0.25,  // Taller peaks by default
             threshold: 0.02,    // Minimum density to show
@@ -1567,145 +1639,246 @@ def generate_html(density_data: dict, default_sigma: float = 0.0, default_power:
         }
         
         // Satellite bar chart showing US state counts
-        let satelliteChart = null;
-        let satelliteChartVisible = true;
+        let stateMoon = null;
+        let countryMoon = null;
+        let stateMoonVisible = true;
+        let countryMoonVisible = true;
         
-        function createSatelliteBarChart() {
-            if (!densityData.state_counts || densityData.state_counts.length === 0) {
-                console.log('No state counts available for satellite chart');
-                return null;
-            }
+        // Moon positions (offset from globe)
+        const STATE_MOON_POS = new THREE.Vector3(GLOBE_RADIUS * 3.2, GLOBE_RADIUS * 0.8, -GLOBE_RADIUS * 0.5);
+        const COUNTRY_MOON_POS = new THREE.Vector3(-GLOBE_RADIUS * 3.2, GLOBE_RADIUS * 0.8, -GLOBE_RADIUS * 0.5);
+        
+        function createSpikeyMoon(data, position, title, colorScheme = 'warm') {
+            /*
+             * Creates a spikey moon - a sphere with radial bars projecting outward
+             * like spikes on a ball. Labels are on the outer rim.
+             */
+            if (!data || data.length === 0) return null;
             
             const group = new THREE.Group();
-            const states = densityData.state_counts.slice(0, 20); // Top 20 states
+            const moonRadius = 1.2;
+            const maxSpikeLength = 1.5;
+            const items = data.slice(0, 24); // Max 24 items for readability
+            const maxCount = Math.max(...items.map(d => d.count));
             
-            if (states.length === 0) return null;
-            
-            // Position the chart "in orbit" - offset from Earth to not obstruct view
-            // Place it in the upper-right quadrant when viewing USA
-            const chartCenterX = GLOBE_RADIUS * 2.8;  // To the right of globe
-            const chartCenterY = GLOBE_RADIUS * 1.5;  // Above center
-            const chartCenterZ = -GLOBE_RADIUS * 0.5; // Slightly behind
-            
-            // Chart dimensions
-            const chartWidth = 4;
-            const chartHeight = 3;
-            const barWidth = chartWidth / states.length * 0.8;
-            const barSpacing = chartWidth / states.length;
-            const maxCount = Math.max(...states.map(s => s.count));
-            
-            // Create a backing plate for the chart
-            const plateGeo = new THREE.PlaneGeometry(chartWidth + 0.5, chartHeight + 1);
-            const plateMat = new THREE.MeshBasicMaterial({
-                color: 0x0a1020,
-                transparent: true,
-                opacity: 0.85,
-                side: THREE.DoubleSide
-            });
-            const plate = new THREE.Mesh(plateGeo, plateMat);
-            plate.position.set(chartCenterX, chartCenterY + 0.3, chartCenterZ - 0.1);
-            group.add(plate);
-            
-            // Add title
-            const titleCanvas = document.createElement('canvas');
-            titleCanvas.width = 512;
-            titleCanvas.height = 64;
-            const titleCtx = titleCanvas.getContext('2d');
-            titleCtx.fillStyle = '#ffffff';
-            titleCtx.font = 'bold 32px Arial';
-            titleCtx.textAlign = 'center';
-            titleCtx.fillText('📊 Top States by Count', 256, 42);
-            
-            const titleTexture = new THREE.CanvasTexture(titleCanvas);
-            const titleMat = new THREE.SpriteMaterial({ map: titleTexture, transparent: true });
-            const titleSprite = new THREE.Sprite(titleMat);
-            titleSprite.position.set(chartCenterX, chartCenterY + chartHeight/2 + 0.4, chartCenterZ);
-            titleSprite.scale.set(2.5, 0.3, 1);
-            group.add(titleSprite);
-            
-            // Create bars with gradient colors
-            const barColors = [
+            // Color schemes
+            const colors = colorScheme === 'warm' ? [
                 0xff6b6b, 0xff8e72, 0xffa94d, 0xffc078, 0xffd43b,
-                0xd4e157, 0x9ccc65, 0x66bb6a, 0x4db6ac, 0x4dd0e1,
-                0x4fc3f7, 0x64b5f6, 0x7986cb, 0x9575cd, 0xba68c8,
-                0xe57373, 0xf06292, 0xab47bc, 0x7e57c2, 0x5c6bc0
+                0xffeb3b, 0xcddc39, 0x8bc34a, 0x4caf50, 0x009688,
+                0x00bcd4, 0x03a9f4, 0x2196f3, 0x3f51b5, 0x673ab7,
+                0x9c27b0, 0xe91e63, 0xf44336, 0xff5722, 0xff9800,
+                0xffc107, 0xffeb3b, 0xc0ca33, 0x7cb342
+            ] : [
+                0x4fc3f7, 0x29b6f6, 0x03a9f4, 0x00bcd4, 0x009688,
+                0x4db6ac, 0x80cbc4, 0xa5d6a7, 0x81c784, 0x66bb6a,
+                0x9ccc65, 0xaed581, 0xc5e1a5, 0xdce775, 0xfff176,
+                0xffee58, 0xffca28, 0xffa726, 0xff8a65, 0xef5350,
+                0xec407a, 0xab47bc, 0x7e57c2, 0x5c6bc0
             ];
             
-            states.forEach((state, i) => {
-                const normalizedHeight = (state.count / maxCount) * chartHeight * 0.85;
-                const x = chartCenterX - chartWidth/2 + barSpacing * (i + 0.5);
-                const y = chartCenterY - chartHeight/2 + normalizedHeight/2 + 0.1;
+            // Create moon core (dark sphere)
+            const coreGeo = new THREE.SphereGeometry(moonRadius, 32, 32);
+            const coreMat = new THREE.MeshPhongMaterial({
+                color: 0x1a1a2e,
+                shininess: 30,
+                transparent: true,
+                opacity: 0.9
+            });
+            const core = new THREE.Mesh(coreGeo, coreMat);
+            group.add(core);
+            
+            // Add subtle grid lines on the moon surface
+            const gridMat = new THREE.LineBasicMaterial({ color: 0x334455, transparent: true, opacity: 0.3 });
+            for (let i = 0; i < 6; i++) {
+                const phi = (i / 6) * Math.PI;
+                const circlePoints = [];
+                for (let j = 0; j <= 64; j++) {
+                    const theta = (j / 64) * Math.PI * 2;
+                    circlePoints.push(new THREE.Vector3(
+                        moonRadius * 1.01 * Math.sin(phi) * Math.cos(theta),
+                        moonRadius * 1.01 * Math.cos(phi),
+                        moonRadius * 1.01 * Math.sin(phi) * Math.sin(theta)
+                    ));
+                }
+                const circleGeo = new THREE.BufferGeometry().setFromPoints(circlePoints);
+                group.add(new THREE.Line(circleGeo, gridMat));
+            }
+            
+            // Create spikes (radial bars) evenly distributed
+            const numItems = items.length;
+            items.forEach((item, i) => {
+                // Distribute around the equator with slight vertical variation
+                const angle = (i / numItems) * Math.PI * 2;
+                const verticalOffset = (i % 3 - 1) * 0.15; // Slight stagger
                 
-                // Bar geometry
-                const barGeo = new THREE.BoxGeometry(barWidth, normalizedHeight, 0.15);
-                const barMat = new THREE.MeshPhongMaterial({
-                    color: barColors[i % barColors.length],
-                    shininess: 50,
-                    transparent: true,
-                    opacity: 0.9
+                const normalizedLength = (item.count / maxCount) * maxSpikeLength;
+                const spikeLength = Math.max(0.1, normalizedLength);
+                
+                // Direction vector for this spike
+                const dir = new THREE.Vector3(
+                    Math.cos(angle),
+                    verticalOffset,
+                    Math.sin(angle)
+                ).normalize();
+                
+                // Spike geometry (tapered cylinder)
+                const spikeGeo = new THREE.CylinderGeometry(0.03, 0.08, spikeLength, 8);
+                const spikeMat = new THREE.MeshPhongMaterial({
+                    color: colors[i % colors.length],
+                    shininess: 60,
+                    emissive: colors[i % colors.length],
+                    emissiveIntensity: 0.2
                 });
-                const bar = new THREE.Mesh(barGeo, barMat);
-                bar.position.set(x, y, chartCenterZ);
-                group.add(bar);
+                const spike = new THREE.Mesh(spikeGeo, spikeMat);
                 
-                // State label (below bar)
+                // Position spike: start at moon surface, extend outward
+                const spikeStart = dir.clone().multiplyScalar(moonRadius);
+                const spikeCenter = dir.clone().multiplyScalar(moonRadius + spikeLength / 2);
+                spike.position.copy(spikeCenter);
+                
+                // Rotate spike to point outward
+                spike.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), dir);
+                group.add(spike);
+                
+                // Add label at outer end of spike (on the rim)
+                const labelDist = moonRadius + spikeLength + 0.25;
+                const labelPos = dir.clone().multiplyScalar(labelDist);
+                
+                // Create label canvas
                 const labelCanvas = document.createElement('canvas');
-                labelCanvas.width = 64;
-                labelCanvas.height = 48;
+                labelCanvas.width = 128;
+                labelCanvas.height = 64;
                 const ctx = labelCanvas.getContext('2d');
+                
+                // Draw label background
+                ctx.fillStyle = 'rgba(20, 20, 40, 0.8)';
+                ctx.roundRect(4, 4, 120, 56, 6);
+                ctx.fill();
+                
+                // Draw abbreviation/code
                 ctx.fillStyle = '#ffffff';
-                ctx.font = 'bold 24px Arial';
+                ctx.font = 'bold 20px Arial';
                 ctx.textAlign = 'center';
-                ctx.fillText(state.abbrev, 32, 28);
+                ctx.fillText(item.abbrev || item.code || item.name?.substring(0, 3) || '?', 64, 28);
+                
+                // Draw count
+                ctx.fillStyle = '#aaaaaa';
+                ctx.font = '14px Arial';
+                const countStr = item.count >= 1000000 ? (item.count/1000000).toFixed(1) + 'M' :
+                                 item.count >= 1000 ? (item.count/1000).toFixed(1) + 'k' : 
+                                 item.count.toString();
+                ctx.fillText(countStr, 64, 48);
                 
                 const labelTexture = new THREE.CanvasTexture(labelCanvas);
                 const labelMat = new THREE.SpriteMaterial({ map: labelTexture, transparent: true });
                 const labelSprite = new THREE.Sprite(labelMat);
-                labelSprite.position.set(x, chartCenterY - chartHeight/2 - 0.15, chartCenterZ);
-                labelSprite.scale.set(0.4, 0.3, 1);
+                labelSprite.position.copy(labelPos);
+                labelSprite.scale.set(0.6, 0.3, 1);
                 group.add(labelSprite);
-                
-                // Count label (on top of bar) - only for top 10
-                if (i < 10) {
-                    const countCanvas = document.createElement('canvas');
-                    countCanvas.width = 128;
-                    countCanvas.height = 48;
-                    const countCtx = countCanvas.getContext('2d');
-                    countCtx.fillStyle = '#ffffff';
-                    countCtx.font = '20px Arial';
-                    countCtx.textAlign = 'center';
-                    const countStr = state.count >= 1000 ? (state.count/1000).toFixed(1) + 'k' : state.count.toString();
-                    countCtx.fillText(countStr, 64, 30);
-                    
-                    const countTexture = new THREE.CanvasTexture(countCanvas);
-                    const countMat = new THREE.SpriteMaterial({ map: countTexture, transparent: true });
-                    const countSprite = new THREE.Sprite(countMat);
-                    countSprite.position.set(x, y + normalizedHeight/2 + 0.2, chartCenterZ);
-                    countSprite.scale.set(0.5, 0.2, 1);
-                    group.add(countSprite);
-                }
             });
             
-            // Add grid lines
-            const gridMat = new THREE.LineBasicMaterial({ color: 0x334455, transparent: true, opacity: 0.5 });
-            for (let i = 0; i <= 4; i++) {
-                const y = chartCenterY - chartHeight/2 + (chartHeight * 0.85 * i / 4) + 0.1;
-                const points = [
-                    new THREE.Vector3(chartCenterX - chartWidth/2 - 0.1, y, chartCenterZ - 0.05),
-                    new THREE.Vector3(chartCenterX + chartWidth/2 + 0.1, y, chartCenterZ - 0.05)
-                ];
-                const lineGeo = new THREE.BufferGeometry().setFromPoints(points);
-                group.add(new THREE.Line(lineGeo, gridMat));
-            }
+            // Add title above the moon
+            const titleCanvas = document.createElement('canvas');
+            titleCanvas.width = 512;
+            titleCanvas.height = 80;
+            const titleCtx = titleCanvas.getContext('2d');
+            titleCtx.fillStyle = '#ffffff';
+            titleCtx.font = 'bold 36px Arial';
+            titleCtx.textAlign = 'center';
+            titleCtx.fillText(title, 256, 45);
+            
+            const titleTexture = new THREE.CanvasTexture(titleCanvas);
+            const titleMat = new THREE.SpriteMaterial({ map: titleTexture, transparent: true });
+            const titleSprite = new THREE.Sprite(titleMat);
+            titleSprite.position.set(0, moonRadius + maxSpikeLength + 0.8, 0);
+            titleSprite.scale.set(3, 0.5, 1);
+            group.add(titleSprite);
+            
+            // Add scale indicator
+            const scaleCanvas = document.createElement('canvas');
+            scaleCanvas.width = 256;
+            scaleCanvas.height = 64;
+            const scaleCtx = scaleCanvas.getContext('2d');
+            scaleCtx.fillStyle = '#888888';
+            scaleCtx.font = '18px Arial';
+            scaleCtx.textAlign = 'center';
+            const maxStr = maxCount >= 1000000 ? (maxCount/1000000).toFixed(1) + 'M' :
+                          maxCount >= 1000 ? (maxCount/1000).toFixed(0) + 'k' : maxCount.toString();
+            scaleCtx.fillText('Max: ' + maxStr, 128, 35);
+            
+            const scaleTexture = new THREE.CanvasTexture(scaleCanvas);
+            const scaleMat = new THREE.SpriteMaterial({ map: scaleTexture, transparent: true });
+            const scaleSprite = new THREE.Sprite(scaleMat);
+            scaleSprite.position.set(0, -(moonRadius + 0.5), 0);
+            scaleSprite.scale.set(1.5, 0.4, 1);
+            group.add(scaleSprite);
+            
+            // Position the entire moon
+            group.position.copy(position);
             
             return group;
         }
         
-        function toggleSatelliteChart() {
-            if (satelliteChart) {
-                satelliteChartVisible = !satelliteChartVisible;
-                satelliteChart.visible = satelliteChartVisible;
+        function createStateMoon() {
+            if (!densityData.state_counts || densityData.state_counts.length === 0) {
+                console.log('No state counts available for state moon');
+                return null;
             }
+            return createSpikeyMoon(densityData.state_counts, STATE_MOON_POS, '🇺🇸 US States', 'warm');
+        }
+        
+        function createCountryMoon() {
+            if (!densityData.country_counts || densityData.country_counts.length === 0) {
+                console.log('No country counts available for country moon');
+                return null;
+            }
+            return createSpikeyMoon(densityData.country_counts, COUNTRY_MOON_POS, '🌍 Countries', 'cool');
+        }
+        
+        function toggleStateMoon() {
+            if (stateMoon) {
+                stateMoonVisible = !stateMoonVisible;
+                stateMoon.visible = stateMoonVisible;
+                document.getElementById('toggle-state-moon-btn').textContent = 
+                    stateMoonVisible ? '🇺🇸 Hide State Moon' : '🇺🇸 Show State Moon';
+            }
+        }
+        
+        function toggleCountryMoon() {
+            if (countryMoon) {
+                countryMoonVisible = !countryMoonVisible;
+                countryMoon.visible = countryMoonVisible;
+                document.getElementById('toggle-country-moon-btn').textContent = 
+                    countryMoonVisible ? '🌍 Hide Country Moon' : '🌍 Show Country Moon';
+            }
+        }
+        
+        function zoomToStateMoon() {
+            animateCameraTo(STATE_MOON_POS.clone().add(new THREE.Vector3(0, 0, 5)), STATE_MOON_POS);
+        }
+        
+        function zoomToCountryMoon() {
+            animateCameraTo(COUNTRY_MOON_POS.clone().add(new THREE.Vector3(0, 0, 5)), COUNTRY_MOON_POS);
+        }
+        
+        function animateCameraTo(targetPos, lookAtPos) {
+            const startPos = camera.position.clone();
+            const startTarget = controls.target.clone();
+            const duration = 1000;
+            const startTime = Date.now();
+            
+            function animate() {
+                const elapsed = Date.now() - startTime;
+                const t = Math.min(1, elapsed / duration);
+                const eased = t * t * (3 - 2 * t);
+                
+                camera.position.lerpVectors(startPos, targetPos, eased);
+                controls.target.lerpVectors(startTarget, lookAtPos, eased);
+                controls.update();
+                
+                if (t < 1) requestAnimationFrame(animate);
+            }
+            animate();
         }
         
         function updateVisualization() {
@@ -1986,7 +2159,27 @@ def generate_html(density_data: dict, default_sigma: float = 0.0, default_power:
             document.getElementById('focus-btn').addEventListener('click', focusOnUSA);
             document.getElementById('side-view-btn').addEventListener('click', sideView);
             document.getElementById('reset-view-btn').addEventListener('click', resetView);
-            document.getElementById('toggle-chart-btn').addEventListener('click', toggleSatelliteChart);
+            
+            // Moon toggle and zoom buttons
+            document.getElementById('toggle-state-moon-btn').addEventListener('click', toggleStateMoon);
+            document.getElementById('toggle-country-moon-btn').addEventListener('click', toggleCountryMoon);
+            document.getElementById('zoom-state-moon-btn').addEventListener('click', zoomToStateMoon);
+            document.getElementById('zoom-country-moon-btn').addEventListener('click', zoomToCountryMoon);
+            
+            // Panel toggle buttons
+            document.getElementById('toggle-controls').addEventListener('click', () => {
+                const panel = document.getElementById('controls');
+                panel.classList.toggle('panel-collapsed');
+                document.getElementById('toggle-controls').textContent = 
+                    panel.classList.contains('panel-collapsed') ? '☰' : '✕';
+            });
+            
+            document.getElementById('toggle-peaks').addEventListener('click', () => {
+                const panel = document.getElementById('peaks-panel');
+                panel.classList.toggle('panel-collapsed-right');
+                document.getElementById('toggle-peaks').textContent = 
+                    panel.classList.contains('panel-collapsed-right') ? '📍' : '✕';
+            });
             
             document.getElementById('point-count').textContent = 
                 densityData.total_points.toLocaleString();
@@ -2116,7 +2309,7 @@ def generate_html(density_data: dict, default_sigma: float = 0.0, default_power:
         let localAnimationId = null;  // Track animation frame
         
         const localSettings = {
-            sigma: 0.05,
+            sigma: 0,  // Default to 0 for sharp peaks
             power: 2.0,
             heightScale: 0.5,
             threshold: 0.01,
@@ -2677,11 +2870,17 @@ def generate_html(density_data: dict, default_sigma: float = 0.0, default_power:
                 boundaryLines = createBoundaryLines();
                 if (boundaryLines) scene.add(boundaryLines);
                 
-                // Create satellite bar chart for US state counts
-                satelliteChart = createSatelliteBarChart();
-                if (satelliteChart) {
-                    scene.add(satelliteChart);
-                    console.log('Added satellite bar chart for state counts');
+                // Create spikey moons for statistics
+                stateMoon = createStateMoon();
+                if (stateMoon) {
+                    scene.add(stateMoon);
+                    console.log('Added state moon with', densityData.state_counts?.length || 0, 'states');
+                }
+                
+                countryMoon = createCountryMoon();
+                if (countryMoon) {
+                    scene.add(countryMoon);
+                    console.log('Added country moon with', densityData.country_counts?.length || 0, 'countries');
                 }
                 
                 setupControls();
@@ -2692,10 +2891,12 @@ def generate_html(density_data: dict, default_sigma: float = 0.0, default_power:
                 document.getElementById('stats').classList.remove('hidden');
                 document.getElementById('colorbar').classList.remove('hidden');
                 document.getElementById('colorbar-labels').classList.remove('hidden');
+                document.getElementById('toggle-controls').classList.remove('hidden');
                 
                 // Show peaks panel if peaks exist
                 if (densityData.peaks && densityData.peaks.length > 0) {
                     document.getElementById('peaks-panel').classList.remove('hidden');
+                    document.getElementById('toggle-peaks').classList.remove('hidden');
                 }
                 
                 // Start focused on USA
@@ -2741,7 +2942,16 @@ def main():
                         help='Resolution for local peak histograms (default: 200)')
     parser.add_argument('--workers', type=int, default=4,
                         help='Number of parallel workers for local histograms (default: 4)')
+    parser.add_argument('--quick', action='store_true',
+                        help=f'Quick mode: sample {QUICK_SAMPLE_RATE*100:.0f}% of data for fast testing')
+    parser.add_argument('--sample-rate', type=float, default=1.0,
+                        help='Sample rate 0-1 (1.0 = all data, 0.1 = 10%%). Use --quick for 10%% preset')
     args = parser.parse_args()
+
+    # Determine sample rate
+    sample_rate = QUICK_SAMPLE_RATE if args.quick else args.sample_rate
+    if sample_rate < 1.0:
+        print(f"\n⚡ QUICK MODE: Sampling {sample_rate*100:.0f}% of data for faster processing")
 
     density_data = {
         'bounds': {
@@ -2765,7 +2975,7 @@ def main():
     print(f"\n📊 Computing global histograms at {len(args.resolutions)} resolutions...")
     print(f"   Resolutions: {args.resolutions}")
     histograms, total_points = build_histograms_multi_resolution(
-        args.input, args.resolutions, args.chunk_size
+        args.input, args.resolutions, args.chunk_size, sample_rate
     )
     density_data['total_points'] = total_points
 

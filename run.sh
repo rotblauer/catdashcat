@@ -18,11 +18,10 @@ if [ ! -f "$trimTracksOut" ]; then
 # 👍 👍 👍 👍 👍 👍👍 👍 👍 👍 👍 👍👍 👍 👍 👍 👍 👍👍 👍 👍 👍 👍 👍
 # catnames-cli: https://github.com/rotblauer/cattracks-names
 # mac not like zcat zcat, need cat zcat
-# ,#(properties.Activity!="")
   cat $masterjson|zcat \
   |catnames-cli modify --name-attribute 'properties.Name' --sanitize true \
   |go run main.go \
-    --match-all '#(properties.Speed<50),#(properties.Accuracy<10)' \
+    --match-all '#(properties.Speed<50),#(properties.Accuracy<10),#(properties.Activity!="")' \
     --match-any '#(properties.Name=="ia"),#(properties.Name=="rye")' \
     filter \
     |gzip  > $trimTracksOut
@@ -38,5 +37,6 @@ fi
 
 cat $trimTracksOut \
 |zcat \
+| awk 'NR % 10 == 0' \
 |.venv/bin/python json_to_tsv.py \
 --output "output/raw.tsv.gz"
