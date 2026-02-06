@@ -9,7 +9,7 @@ Example usage:
     python generate_globe_viewer.py --resolutions 100 250 500 --sigma 1.2 --power 2.5
     .venv/bin/python generate_globe_viewer.py --resolutions 180 360 720
     .venv/bin/python generate_globe_viewer.py --resolutions 2880 --sigma 0.01 --n-peaks 10 --local-resolution 600 --workers 10
-
+    .venv/bin/python generate_globe_viewer.py --resolutions 8640  --sigma 0.01  --n-peaks 10 --local-resolution 1200 --workers 10
     # Quick mode for fast testing (10% sample)
     .venv/bin/python generate_globe_viewer.py --quick --resolutions 180 360
 
@@ -706,19 +706,56 @@ def generate_html(density_data: dict, default_sigma: float = 0.0, default_power:
         }
         
         #loading .spinner {
-            width: 50px;
-            height: 50px;
-            border: 4px solid rgba(255, 255, 255, 0.1);
-            border-top-color: #e94560;
-            border-radius: 50%;
-            animation: spin 1s linear infinite;
+            width: 60px;
+            height: 60px;
+            font-size: 50px;
+            animation: catSpin 1.5s ease-in-out infinite;
             margin: 0 auto 15px;
         }
         
         @keyframes spin { to { transform: rotate(360deg); } }
+        @keyframes catSpin { 
+            0% { transform: rotate(0deg) scale(1); }
+            25% { transform: rotate(90deg) scale(1.1); }
+            50% { transform: rotate(180deg) scale(1); }
+            75% { transform: rotate(270deg) scale(1.1); }
+            100% { transform: rotate(360deg) scale(1); }
+        }
+        @keyframes float {
+            0%, 100% { transform: translateY(0px); }
+            50% { transform: translateY(-10px); }
+        }
+        @keyframes twinkle {
+            0%, 100% { opacity: 0.3; }
+            50% { opacity: 1; }
+        }
         
         #loading p { color: #aaa; font-size: 14px; }
+        #loading .cat-fact { 
+            font-size: 12px; 
+            color: #feca57; 
+            margin-top: 10px;
+            font-style: italic;
+            max-width: 300px;
+        }
         .hidden { display: none !important; }
+        
+        /* Fun cat elements */
+        .space-cat {
+            position: absolute;
+            font-size: 40px;
+            animation: float 3s ease-in-out infinite;
+            filter: drop-shadow(0 0 10px rgba(255, 200, 100, 0.5));
+            z-index: 50;
+            pointer-events: none;
+        }
+        
+        #space-cat-1 { top: 15%; right: 15%; animation-delay: 0s; }
+        #space-cat-2 { bottom: 20%; left: 10%; animation-delay: 1s; }
+        
+        .paw-cursor {
+            cursor: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='24' height='24' viewBox='0 0 24 24'%3E%3Ctext y='20' font-size='20'%3E🐾%3C/text%3E%3C/svg%3E") 12 12, auto;
+        }
         
         #colorbar {
             position: absolute;
@@ -1163,20 +1200,25 @@ def generate_html(density_data: dict, default_sigma: float = 0.0, default_power:
 </head>
 <body>
     <div id="container">
-        <div id="canvas-container"></div>
+        <div id="canvas-container" class="paw-cursor"></div>
+        
+        <!-- Floating space cats -->
+        <div id="space-cat-1" class="space-cat hidden">🐱‍🚀</div>
+        <div id="space-cat-2" class="space-cat hidden">😺</div>
         
         <div id="loading">
-            <div class="spinner"></div>
-            <p>Loading globe data...</p>
+            <div class="spinner">🐱</div>
+            <p>Loading cat tracks from space...</p>
+            <p class="cat-fact" id="cat-fact">Did you know? Cats spend 70% of their lives sleeping!</p>
         </div>
         
         <!-- Toggle buttons for panels (always visible) -->
         <button id="toggle-controls" class="panel-toggle hidden" title="Toggle Controls">☰</button>
-        <button id="toggle-peaks" class="panel-toggle hidden" title="Toggle Peaks">📍</button>
+        <button id="toggle-peaks" class="panel-toggle hidden" title="Toggle Peaks">🐾</button>
         
         <div id="controls" class="hidden">
-            <h1>🌍 Cat GPS Globe</h1>
-            <p class="subtitle">Worldwide Distribution</p>
+            <h1>🐱 Space Cat Tracker</h1>
+            <p class="subtitle">Feline GPS Adventures</p>
             
             <div class="control-group">
                 <label>Resolution</label>
@@ -1250,19 +1292,19 @@ def generate_html(density_data: dict, default_sigma: float = 0.0, default_power:
         </div>
         
         <div id="peaks-panel" class="hidden">
-            <h3>🏔️ Top Peaks</h3>
+            <h3>🐾 Favorite Spots</h3>
             <div id="peaks-list"></div>
         </div>
         
         <div id="stats" class="hidden">
-            GPS observations: <span id="point-count">0</span> |
-            Drag to rotate, scroll to zoom, right-drag to pan
+            🐱 Cat adventures: <span id="point-count">0</span> |
+            Drag to explore, scroll to zoom, right-drag to pan
         </div>
         
         <div id="colorbar" class="hidden"></div>
         <div id="colorbar-labels" class="hidden">
-            <span>High</span>
-            <span>Low</span>
+            <span>🔥 Hot</span>
+            <span>❄️ Cool</span>
         </div>
         
         <!-- Google Earth-style Navigation Widget -->
@@ -1331,8 +1373,8 @@ def generate_html(density_data: dict, default_sigma: float = 0.0, default_power:
             <div class="control-group">
                 <label>Show Map Overlay</label>
                 <select id="local-map-overlay">
-                    <option value="false" selected>Off</option>
-                    <option value="true">On (OpenStreetMap)</option>
+                    <option value="false">Off</option>
+                    <option value="true" selected>On (OpenStreetMap)</option>
                 </select>
             </div>
         </div>
@@ -2139,6 +2181,9 @@ def generate_html(density_data: dict, default_sigma: float = 0.0, default_power:
             atmosphereMesh = createAtmosphere();
             scene.add(atmosphereMesh);
             
+            // Create orbiting cat satellites! 🐱🛰️
+            createCatSatellites();
+            
             window.addEventListener('resize', () => {
                 camera.aspect = window.innerWidth / window.innerHeight;
                 camera.updateProjectionMatrix();
@@ -2148,9 +2193,114 @@ def generate_html(density_data: dict, default_sigma: float = 0.0, default_power:
             function animate() {
                 requestAnimationFrame(animate);
                 controls.update();
+                
+                // Update cat satellite orbits
+                updateCatSatellites();
+                
                 renderer.render(scene, camera);
             }
             animate();
+        }
+        
+        // ============================================
+        // CAT SATELLITES 🐱🛰️
+        // ============================================
+        
+        const catSatellites = [];
+        const CAT_EMOJIS = ['🐱', '😺', '😸', '🙀', '😻'];
+        
+        function createCatSatellite(orbitRadius, orbitSpeed, orbitTilt, startAngle, emoji) {
+            const group = new THREE.Group();
+            
+            // Create sprite with cat emoji
+            const canvas = document.createElement('canvas');
+            canvas.width = 64;
+            canvas.height = 64;
+            const ctx = canvas.getContext('2d');
+            ctx.font = '48px Arial';
+            ctx.textAlign = 'center';
+            ctx.textBaseline = 'middle';
+            ctx.fillText(emoji, 32, 32);
+            
+            const texture = new THREE.CanvasTexture(canvas);
+            const material = new THREE.SpriteMaterial({ 
+                map: texture, 
+                transparent: true,
+                depthTest: false
+            });
+            const sprite = new THREE.Sprite(material);
+            sprite.scale.set(0.5, 0.5, 1);
+            group.add(sprite);
+            
+            // Add a subtle trail/glow
+            const trailGeo = new THREE.BufferGeometry();
+            const trailPoints = [];
+            for (let i = 0; i < 20; i++) {
+                trailPoints.push(0, 0, 0);
+            }
+            trailGeo.setAttribute('position', new THREE.Float32BufferAttribute(trailPoints, 3));
+            const trailMat = new THREE.LineBasicMaterial({ 
+                color: 0xffaa00, 
+                transparent: true, 
+                opacity: 0.3 
+            });
+            const trail = new THREE.Line(trailGeo, trailMat);
+            group.add(trail);
+            
+            scene.add(group);
+            
+            return {
+                group,
+                sprite,
+                trail,
+                orbitRadius,
+                orbitSpeed,
+                orbitTilt,
+                angle: startAngle,
+                trailPositions: []
+            };
+        }
+        
+        function createCatSatellites() {
+            // Create 5 cat satellites in different orbits
+            const configs = [
+                { radius: GLOBE_RADIUS * 1.3, speed: 0.008, tilt: 0.3, start: 0, emoji: '🐱' },
+                { radius: GLOBE_RADIUS * 1.5, speed: 0.005, tilt: -0.5, start: Math.PI * 0.5, emoji: '😺' },
+                { radius: GLOBE_RADIUS * 1.4, speed: 0.006, tilt: 0.8, start: Math.PI, emoji: '😸' },
+                { radius: GLOBE_RADIUS * 1.6, speed: 0.004, tilt: -0.2, start: Math.PI * 1.5, emoji: '🙀' },
+                { radius: GLOBE_RADIUS * 1.35, speed: 0.007, tilt: 1.2, start: Math.PI * 0.7, emoji: '😻' }
+            ];
+            
+            configs.forEach(cfg => {
+                const sat = createCatSatellite(cfg.radius, cfg.speed, cfg.tilt, cfg.start, cfg.emoji);
+                catSatellites.push(sat);
+            });
+        }
+        
+        function updateCatSatellites() {
+            catSatellites.forEach(sat => {
+                // Update orbit angle
+                sat.angle += sat.orbitSpeed;
+                
+                // Calculate position on tilted orbit
+                const x = sat.orbitRadius * Math.cos(sat.angle);
+                const y = sat.orbitRadius * Math.sin(sat.angle) * Math.sin(sat.orbitTilt);
+                const z = sat.orbitRadius * Math.sin(sat.angle) * Math.cos(sat.orbitTilt);
+                
+                sat.group.position.set(x, y, z);
+                
+                // Update trail
+                sat.trailPositions.unshift({ x, y, z });
+                if (sat.trailPositions.length > 20) sat.trailPositions.pop();
+                
+                const positions = sat.trail.geometry.attributes.position.array;
+                for (let i = 0; i < sat.trailPositions.length; i++) {
+                    positions[i * 3] = sat.trailPositions[i].x;
+                    positions[i * 3 + 1] = sat.trailPositions[i].y;
+                    positions[i * 3 + 2] = sat.trailPositions[i].z;
+                }
+                sat.trail.geometry.attributes.position.needsUpdate = true;
+            });
         }
         
         function setupControls() {
@@ -2387,7 +2537,7 @@ def generate_html(density_data: dict, default_sigma: float = 0.0, default_power:
             power: 2.0,
             heightScale: 0.5,
             threshold: 0.01,
-            showMapOverlay: false
+            showMapOverlay: true  // Default to showing OpenStreetMap
         };
         
         function setupPeaksPanel() {
@@ -2402,7 +2552,7 @@ def generate_html(density_data: dict, default_sigma: float = 0.0, default_power:
                 const item = document.createElement('div');
                 item.className = 'peak-item';
                 item.innerHTML = `
-                    <div class="peak-rank">${index + 1}</div>
+                    <div class="peak-rank">🐾</div>
                     <div class="peak-info">
                         <div>${peak.count.toLocaleString()} obs</div>
                         <div class="coords">${peak.lat.toFixed(2)}°, ${peak.lon.toFixed(2)}°</div>
@@ -2906,11 +3056,42 @@ def generate_html(density_data: dict, default_sigma: float = 0.0, default_power:
             document.getElementById('close-local-btn').onclick = closeLocalView;
         }
         
+        // Fun cat facts for loading screen 🐱
+        const catFacts = [
+            "Cats spend 70% of their lives sleeping! 😴",
+            "A group of cats is called a 'clowder' 🐱🐱🐱",
+            "Cats can rotate their ears 180 degrees! 👂",
+            "A cat's nose print is unique, like a fingerprint 👃",
+            "Cats have over 20 vocalizations, including the meow 🎵",
+            "Ancient Egyptians worshipped cats as gods 👑",
+            "Cats can jump up to 6 times their length! 🦘",
+            "A cat's purr vibrates at 25-150 Hz 〰️",
+            "Cats sleep for about 13-16 hours a day 💤",
+            "The oldest cat ever lived to be 38 years old! 🎂",
+            "Cats have 230 bones in their body 🦴",
+            "A cat can run up to 30 mph in short bursts 🏃",
+            "Whiskers help cats measure openings 📏",
+            "Cats can't taste sweetness 🍬❌"
+        ];
+        
+        let catFactInterval = null;
+        function rotateCatFacts() {
+            const factEl = document.getElementById('cat-fact');
+            if (factEl) {
+                factEl.textContent = catFacts[Math.floor(Math.random() * catFacts.length)];
+            }
+        }
+        
         async function init() {
+            // Start rotating cat facts
+            rotateCatFacts();
+            catFactInterval = setInterval(rotateCatFacts, 3000);
+            
             // Check WebGL availability
             const canvas = document.createElement('canvas');
             const gl = canvas.getContext('webgl') || canvas.getContext('experimental-webgl');
             if (!gl) {
+                clearInterval(catFactInterval);
                 document.getElementById('loading').innerHTML = 
                     `<p style="color: #e94560;">WebGL is not supported in this browser.<br>
                     Please try Safari, Chrome, or Firefox.</p>`;
@@ -2920,6 +3101,7 @@ def generate_html(density_data: dict, default_sigma: float = 0.0, default_power:
             try {
                 initScene();
             } catch (e) {
+                clearInterval(catFactInterval);
                 console.error('Failed to initialize 3D scene:', e);
                 document.getElementById('loading').innerHTML = 
                     `<p style="color: #e94560;">Failed to initialize 3D graphics.<br>
@@ -2960,10 +3142,17 @@ def generate_html(density_data: dict, default_sigma: float = 0.0, default_power:
                 setupControls();
                 updateVisualization();
                 
+                // Stop cat facts rotation
+                if (catFactInterval) clearInterval(catFactInterval);
+                
                 document.getElementById('loading').classList.add('hidden');
                 document.getElementById('stats').classList.remove('hidden');
                 document.getElementById('colorbar').classList.remove('hidden');
                 document.getElementById('colorbar-labels').classList.remove('hidden');
+                
+                // Show floating space cats! 🐱‍🚀
+                document.getElementById('space-cat-1').classList.remove('hidden');
+                document.getElementById('space-cat-2').classList.remove('hidden');
                 
                 // Show toggle buttons (panels default to hidden for cleaner view)
                 document.getElementById('toggle-controls').classList.remove('hidden');
