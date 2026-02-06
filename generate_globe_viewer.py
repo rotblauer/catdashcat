@@ -167,11 +167,14 @@ US_STATES = {
 }
 
 
-def compute_state_counts(input_file: str, shapefile_path: str, chunk_size: int = 500_000) -> list:
+def compute_state_counts(input_file: str, shapefile_path: str, chunk_size: int = 500_000, sample_rate: float = 1.0) -> list:
     """Compute point counts per US state using fast vectorized geopandas spatial joins.
 
     This is MUCH faster than point-by-point checking - uses R-tree spatial indexing.
     Returns a list of {state, abbrev, count, lat, lon} for states with data.
+
+    Args:
+        sample_rate: Float 0-1, fraction of rows to use (1.0 = all)
     """
     import time
     start_time = time.time()
@@ -213,13 +216,14 @@ def compute_state_counts(input_file: str, shapefile_path: str, chunk_size: int =
     states_gdf = states_gdf[['state_fip', 'geometry']]
 
     # Convert to EPSG:4326 to match points (shapefile is typically EPSG:4269)
-    if states_gdf.crs and states_gdf.crs != "EPSG:4326":
-        states_gdf = states_gdf.to_crs("EPSG:4326")
+    # Always convert to ensure CRS matches
+    states_gdf = states_gdf.to_crs("EPSG:4326")
 
     print(f"   ✓ Prepared {len(states_gdf)} state geometries ({time.time()-t0:.1f}s)")
 
     # Step 2: Read points in chunks and do spatial joins
-    print("   Counting points per state (vectorized spatial join)...")
+    sample_msg = f" (sampling {sample_rate*100:.0f}%)" if sample_rate < 1.0 else ""
+    print(f"   Counting points per state (vectorized spatial join){sample_msg}...")
     t0 = time.time()
 
     state_counts = {fip: 0 for fip in US_STATES.keys()}
@@ -237,6 +241,11 @@ def compute_state_counts(input_file: str, shapefile_path: str, chunk_size: int =
         on_bad_lines='skip'
     ):
         chunks_processed += 1
+
+        # Apply sampling if needed
+        if sample_rate < 1.0:
+            chunk = chunk.sample(frac=sample_rate, random_state=42)
+
         chunk['lat'] = pd.to_numeric(chunk['lat'], errors='coerce')
         chunk['lon'] = pd.to_numeric(chunk['lon'], errors='coerce')
 
@@ -450,7 +459,8 @@ def find_top_peaks(histograms: dict, n_peaks: int = 10) -> list:
 
 def build_local_histogram(input_file: str, center_lat: float, center_lon: float,
                           radius_km: float = 50, resolution: int = 200,
-                          chunk_size: int = 500_000, peak_index: int = 0) -> dict:
+                          chunk_size: int = 500_000, peak_index: int = 0,
+                          sample_rate: float = 1.0) -> dict:
     """Build a high-resolution histogram for a local region around a point.
 
     Args:
@@ -458,6 +468,7 @@ def build_local_histogram(input_file: str, center_lat: float, center_lon: float,
         radius_km: Radius in kilometers (default 50km = 100km x 100km region)
         resolution: Number of bins per side
         peak_index: Index of the peak (for logging)
+        sample_rate: Float 0-1, fraction of rows to use (1.0 = all)
     """
     # Convert km to approximate degrees (at given latitude)
     km_per_deg_lat = 111.0
@@ -486,6 +497,10 @@ def build_local_histogram(input_file: str, center_lat: float, center_lon: float,
         chunksize=chunk_size,
         on_bad_lines='skip'
     ):
+        # Apply sampling if needed
+        if sample_rate < 1.0:
+            chunk = chunk.sample(frac=sample_rate, random_state=42)
+
         chunk['lat'] = pd.to_numeric(chunk['lat'], errors='coerce')
         chunk['lon'] = pd.to_numeric(chunk['lon'], errors='coerce')
 
@@ -523,7 +538,7 @@ def build_local_histogram(input_file: str, center_lat: float, center_lon: float,
 
 def build_local_histograms_parallel(input_file: str, peaks: list, radius_km: float = 50,
                                      resolution: int = 200, chunk_size: int = 500_000,
-                                     max_workers: int = 4) -> dict:
+                                     max_workers: int = 4, sample_rate: float = 1.0) -> dict:
     """Build local histograms for all peaks in parallel using threads.
 
     Args:
@@ -533,6 +548,7 @@ def build_local_histograms_parallel(input_file: str, peaks: list, radius_km: flo
         resolution: Number of bins per side
         chunk_size: Rows per chunk when reading
         max_workers: Number of parallel threads
+        sample_rate: Float 0-1, fraction of rows to use (1.0 = all)
 
     Returns:
         Dictionary mapping peak index (as string) to local histogram data
@@ -554,7 +570,8 @@ def build_local_histograms_parallel(input_file: str, peaks: list, radius_km: flo
             radius_km=radius_km,
             resolution=resolution,
             chunk_size=chunk_size,
-            peak_index=idx
+            peak_index=idx,
+            sample_rate=sample_rate
         )
         elapsed = time.time() - t0
         with print_lock:
@@ -1040,15 +1057,15 @@ def generate_html(density_data: dict, default_sigma: float = 0.0, default_power:
         /* Panel toggle buttons */
         .panel-toggle {
             position: absolute;
-            width: 28px;
-            height: 28px;
-            background: rgba(40, 40, 60, 0.9);
+            width: 36px;
+            height: 36px;
+            background: rgba(40, 40, 60, 0.95);
             border: 1px solid rgba(255, 255, 255, 0.2);
-            border-radius: 6px;
+            border-radius: 8px;
             color: #fff;
-            font-size: 14px;
+            font-size: 16px;
             cursor: pointer;
-            z-index: 150;
+            z-index: 200;
             display: flex;
             align-items: center;
             justify-content: center;
@@ -1056,11 +1073,13 @@ def generate_html(density_data: dict, default_sigma: float = 0.0, default_power:
         }
         .panel-toggle:hover { background: rgba(233, 69, 96, 0.7); }
         
-        #toggle-controls { top: 20px; left: 290px; }
-        #toggle-peaks { top: 20px; right: 290px; }
+        #toggle-controls { top: 20px; left: 20px; }
+        #toggle-peaks { top: 20px; right: 20px; }
         
-        .panel-collapsed { transform: translateX(-300px); }
-        .panel-collapsed-right { transform: translateX(300px); }
+        /* Panel visibility - use display none for proper hiding */
+        #controls.panel-hidden, #peaks-panel.panel-hidden {
+            display: none !important;
+        }
         
         /* Moon buttons */
         .moon-btn {
@@ -1080,6 +1099,63 @@ def generate_html(density_data: dict, default_sigma: float = 0.0, default_power:
         #toggle-country-moon-btn { background: #3498db; }
         #zoom-state-moon-btn { background: #d35400; }
         #zoom-country-moon-btn { background: #2980b9; }
+        
+        /* Mobile responsive styles */
+        @media (max-width: 768px) {
+            #controls {
+                top: 60px;
+                left: 10px;
+                right: 10px;
+                max-width: none;
+                min-width: auto;
+                max-height: 50vh;
+                overflow-y: auto;
+                padding: 12px;
+            }
+            
+            #controls h1 { font-size: 16px; }
+            
+            #peaks-panel {
+                top: auto;
+                bottom: 80px;
+                right: 10px;
+                left: 10px;
+                max-width: none;
+                max-height: 30vh;
+                overflow-y: auto;
+            }
+            
+            #stats {
+                bottom: 10px;
+                left: 10px;
+                right: 10px;
+                font-size: 10px;
+                text-align: center;
+            }
+            
+            #nav-widget { display: none; }
+            
+            #colorbar, #colorbar-labels { display: none; }
+            
+            .panel-toggle {
+                width: 44px;
+                height: 44px;
+                font-size: 20px;
+            }
+            
+            #toggle-controls { top: 10px; left: 10px; }
+            #toggle-peaks { top: 10px; right: 10px; }
+            
+            .control-group { margin-bottom: 10px; }
+            
+            button { padding: 10px; font-size: 14px; }
+        }
+        
+        @media (max-width: 480px) {
+            #controls { max-height: 40vh; }
+            #peaks-panel { max-height: 25vh; }
+            .moon-btn { padding: 8px; font-size: 12px; }
+        }
     </style>
     
     <!-- Leaflet CSS for map -->
@@ -1094,7 +1170,7 @@ def generate_html(density_data: dict, default_sigma: float = 0.0, default_power:
             <p>Loading globe data...</p>
         </div>
         
-        <!-- Toggle buttons for panels -->
+        <!-- Toggle buttons for panels (always visible) -->
         <button id="toggle-controls" class="panel-toggle hidden" title="Toggle Controls">☰</button>
         <button id="toggle-peaks" class="panel-toggle hidden" title="Toggle Peaks">📍</button>
         
@@ -2166,19 +2242,17 @@ def generate_html(density_data: dict, default_sigma: float = 0.0, default_power:
             document.getElementById('zoom-state-moon-btn').addEventListener('click', zoomToStateMoon);
             document.getElementById('zoom-country-moon-btn').addEventListener('click', zoomToCountryMoon);
             
-            // Panel toggle buttons
+            // Panel toggle buttons - use panel-hidden for proper display:none toggling
             document.getElementById('toggle-controls').addEventListener('click', () => {
                 const panel = document.getElementById('controls');
-                panel.classList.toggle('panel-collapsed');
-                document.getElementById('toggle-controls').textContent = 
-                    panel.classList.contains('panel-collapsed') ? '☰' : '✕';
+                const isHidden = panel.classList.toggle('panel-hidden');
+                document.getElementById('toggle-controls').textContent = isHidden ? '☰' : '✕';
             });
             
             document.getElementById('toggle-peaks').addEventListener('click', () => {
                 const panel = document.getElementById('peaks-panel');
-                panel.classList.toggle('panel-collapsed-right');
-                document.getElementById('toggle-peaks').textContent = 
-                    panel.classList.contains('panel-collapsed-right') ? '📍' : '✕';
+                const isHidden = panel.classList.toggle('panel-hidden');
+                document.getElementById('toggle-peaks').textContent = isHidden ? '📍' : '✕';
             });
             
             document.getElementById('point-count').textContent = 
@@ -2887,16 +2961,20 @@ def generate_html(density_data: dict, default_sigma: float = 0.0, default_power:
                 updateVisualization();
                 
                 document.getElementById('loading').classList.add('hidden');
-                document.getElementById('controls').classList.remove('hidden');
                 document.getElementById('stats').classList.remove('hidden');
                 document.getElementById('colorbar').classList.remove('hidden');
                 document.getElementById('colorbar-labels').classList.remove('hidden');
-                document.getElementById('toggle-controls').classList.remove('hidden');
                 
-                // Show peaks panel if peaks exist
+                // Show toggle buttons (panels default to hidden for cleaner view)
+                document.getElementById('toggle-controls').classList.remove('hidden');
+                document.getElementById('controls').classList.remove('hidden');
+                document.getElementById('controls').classList.add('panel-hidden');  // Start hidden
+                
+                // Show peaks panel toggle if peaks exist
                 if (densityData.peaks && densityData.peaks.length > 0) {
-                    document.getElementById('peaks-panel').classList.remove('hidden');
                     document.getElementById('toggle-peaks').classList.remove('hidden');
+                    document.getElementById('peaks-panel').classList.remove('hidden');
+                    document.getElementById('peaks-panel').classList.add('panel-hidden');  // Start hidden
                 }
                 
                 // Start focused on USA
@@ -2943,9 +3021,9 @@ def main():
     parser.add_argument('--workers', type=int, default=4,
                         help='Number of parallel workers for local histograms (default: 4)')
     parser.add_argument('--quick', action='store_true',
-                        help=f'Quick mode: sample {QUICK_SAMPLE_RATE*100:.0f}% of data for fast testing')
+                        help=f'Quick mode: sample {QUICK_SAMPLE_RATE*100:.0f} percent of data for fast testing')
     parser.add_argument('--sample-rate', type=float, default=1.0,
-                        help='Sample rate 0-1 (1.0 = all data, 0.1 = 10%%). Use --quick for 10%% preset')
+                        help='Sample rate 0-1 (1.0 = all data, 0.1 = 10 percent). Use --quick for 10 percent preset')
     args = parser.parse_args()
 
     # Determine sample rate
@@ -3003,7 +3081,8 @@ def main():
         radius_km=args.local_radius,
         resolution=args.local_resolution,
         chunk_size=args.chunk_size,
-        max_workers=args.workers
+        max_workers=args.workers,
+        sample_rate=sample_rate
     )
 
     # Extract boundaries (US states + world countries if available)
@@ -3029,7 +3108,7 @@ def main():
     # Compute state counts for satellite bar chart
     print(f"\n📊 Computing US state counts for satellite chart...")
     try:
-        state_counts = compute_state_counts(args.input, args.shapefile, args.chunk_size)
+        state_counts = compute_state_counts(args.input, args.shapefile, args.chunk_size, sample_rate)
         density_data['state_counts'] = state_counts
         if state_counts:
             print(f"   Top 3 states:")
